@@ -16,7 +16,10 @@ export class GeminiProviderError extends Error{
 }
 export type GeminiTransport=(url:string,init:RequestInit)=>Promise<Response>;
 export type GeminiCredentials={apiKey:string;serviceAccountJson:string};
-const serviceAccount=z.strictObject({type:z.literal('service_account'),project_id:z.string().min(1).max(128),client_email:z.string().email(),private_key:z.string().min(100),token_uri:z.literal(tokenEndpoint).optional()});
+// Google downloads service-account keys with additional standard fields (for
+// example private_key_id, auth_uri and client_x509_cert_url). Validate only
+// the fields LeeOS uses, while letting Zod discard the rest.
+const serviceAccount=z.object({type:z.literal('service_account'),project_id:z.string().min(1).max(128),client_email:z.string().email(),private_key:z.string().min(100),token_uri:z.literal(tokenEndpoint).optional()});
 const responseJson=z.record(z.string(),z.unknown());
 const modelInfo=z.object({name:z.string(),version:z.string().optional(),inputTokenLimit:z.number().int().positive(),outputTokenLimit:z.number().int().positive(),supportedGenerationMethods:z.array(z.string())});
 const tokenCount=z.object({totalTokens:z.number().int().positive()});
@@ -68,8 +71,8 @@ export function createGeminiAdapter(options:{credentials:()=>GeminiCredentials|u
  async function billingProof(apiKey:string,signal?:AbortSignal){
   const bearer=await accessToken(signal);let response:Response;
   try{response=await transport(keyLookupEndpoint+'?keyString='+encodeURIComponent(apiKey),{method:'GET',redirect:'error',signal:requestSignal(signal),headers:{Authorization:'Bearer '+bearer,Accept:'application/json'}});}
-  catch{throw new GeminiProviderError('GEMINI_BILLING_PROOF_UNAVAILABLE');}
-  if(!response.ok)throw new GeminiProviderError('GEMINI_BILLING_PROOF_UNAVAILABLE');
+  catch{throw new GeminiProviderError('GEMINI_API_KEY_LOOKUP_UNAVAILABLE');}
+  if(!response.ok)throw new GeminiProviderError('GEMINI_API_KEY_LOOKUP_UNAVAILABLE');
   const lookup=parse(z.object({parent:z.string().regex(/^projects\/[0-9]+\/locations\/global$/),name:z.string().regex(/^projects\/[0-9]+\/locations\/global\/keys\/[a-zA-Z0-9_-]+$/)}),await readJson(response,32768),'GEMINI_BILLING_PROOF_INVALID');
   const projectNumber=lookup.parent.split('/')[1];let billing:Response;
   let keyMetadata:Response;
@@ -79,8 +82,8 @@ export function createGeminiAdapter(options:{credentials:()=>GeminiCredentials|u
   const restrictions=parse(z.object({restrictions:z.object({apiTargets:z.array(z.object({service:z.string(),methods:z.array(z.string()).optional()})).min(1)})}),await readJson(keyMetadata,32768),'GEMINI_KEY_SCOPE_INVALID');
   if(restrictions.restrictions.apiTargets.length!==1||restrictions.restrictions.apiTargets[0].service!=='generativelanguage.googleapis.com')throw new GeminiProviderError('GEMINI_KEY_SCOPE_TOO_BROAD');
   try{billing=await transport(billingEndpoint+encodeURIComponent(projectNumber)+'/billingInfo',{method:'GET',redirect:'error',signal:requestSignal(signal),headers:{Authorization:'Bearer '+bearer,Accept:'application/json'}});}
-  catch{throw new GeminiProviderError('GEMINI_BILLING_PROOF_UNAVAILABLE');}
-  if(!billing.ok)throw new GeminiProviderError('GEMINI_BILLING_PROOF_UNAVAILABLE');
+  catch{throw new GeminiProviderError('GEMINI_PROJECT_BILLING_READ_UNAVAILABLE');}
+  if(!billing.ok)throw new GeminiProviderError('GEMINI_PROJECT_BILLING_READ_UNAVAILABLE');
   const info=parse(z.object({projectId:z.string().min(1),billingEnabled:z.boolean(),billingAccountName:z.string().optional()}),await readJson(billing,32768),'GEMINI_BILLING_PROOF_INVALID');
   if(info.billingEnabled||Boolean(info.billingAccountName))throw new GeminiProviderError('GEMINI_BILLING_ENABLED');
   return {projectNumber,accountScope:'google-project-'+projectNumber,evidenceRef:'google-project-billing-disabled',projectId:info.projectId};
