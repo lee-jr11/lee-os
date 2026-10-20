@@ -1,0 +1,63 @@
+'use client';
+import {useRef,useState} from 'react';
+import {EnvelopeWorkPanel} from './envelope-work-panel';
+import {ExecutionEnvelopePanel} from './execution-envelope-panel';
+import {CapabilityPlanPanel} from './capability-plan-panel';
+import {readWorkspace,type Workspace} from '../lib/workflow';
+import type {RequirementsContent} from '@leeos/core/requirements';
+import {OwnerApiError,type OwnerClient} from '../lib/owner-client';
+import type {Run,Page} from '../lib/workflow';
+type Contract={id:string;revision:number;currentRevision:number;digest:string;content:RequirementsContent;status:string};
+type Criterion=RequirementsContent['acceptanceCriteria'][number]&{status:string;evidenceVersion:number;verifierAvailable:boolean;evidence:{id:string;details:Record<string,unknown>}|null};
+type Assessment={runId:string;runStatus:string;goalStatus:string;criteriaStatus:string;requirements:Contract;criteria:Criterion[]};
+type Act=(action:(client:OwnerClient)=>Promise<()=>void>)=>Promise<void>;
+function starter(goal:string):RequirementsContent{return {goal:goal||'Describe the outcome you want',requirements:[{id:'outcome',statement:'Define the required outcome',required:true,capabilityIds:['owner_review']}],inputs:[],outputs:[],assumptions:[],questions:[],constraints:[],capabilities:['owner_review'],costPolicy:'ZERO_ONLY',acceptanceCriteria:[{id:'owner_check',description:'Owner verifies the required outcome',requirementIds:['outcome'],required:true,evidenceKind:'owner-review'}]};}
+function EvidenceForm({criterion,busy,onSave}:{criterion:Criterion;busy:boolean;onSave:(value:unknown)=>void}){
+ const [note,setNote]=useState(''),[job,setJob]=useState(''),[outcome,setOutcome]=useState('met'),[ack,setAck]=useState(false);
+ const request=useRef<{signature:string;key:string}|null>(null);
+ function save(){
+  const value=criterion.evidenceKind==='owner-review'?{kind:'owner-review',note,outcome,acknowledgeOwnerReview:true}:{kind:'job-result',jobId:job};
+  const signature=JSON.stringify([criterion.id,criterion.evidenceVersion,value]);if(request.current?.signature!==signature)request.current={signature,key:crypto.randomUUID()};
+  onSave({...value,criterionId:criterion.id,expectedEvidenceVersion:criterion.evidenceVersion,idempotencyKey:request.current.key});setAck(false);
+ }
+ if(!criterion.verifierAvailable)return <p className="muted">This verifier is not implemented yet. The criterion stays pending; an owner note cannot substitute for machine evidence.</p>;
+ return <div>{criterion.evidenceKind==='owner-review'?<><label>Owner observation<textarea maxLength={2000} value={note} onChange={e=>{setNote(e.target.value);setAck(false);}} disabled={busy}/></label><label>Decision<select value={outcome} onChange={e=>{setOutcome(e.target.value);setAck(false);}} disabled={busy}><option value="met">Criterion met</option><option value="not-met">Criterion not met</option></select></label><label className="check"><input type="checkbox" checked={ack} disabled={busy} onChange={e=>setAck(e.target.checked)}/>I personally checked this criterion. This records an owner observation, not an automated verification.</label></>:<><p>The server checks the recorded result of step {criterion.sourceStepKey} in this run. A successful job result does not verify the content of a document or a delivery.</p><label>Recorded job ID<input value={job} onChange={e=>setJob(e.target.value)} disabled={busy}/></label></>}
+  <button disabled={busy||(criterion.evidenceKind==='owner-review'?(!note.trim()||!ack):!job.trim())} onClick={save}>Record evidence</button>
+ </div>;
+}
+export function RequirementsPanel({projectId,run,goal,busy,act,onRun}:{projectId:string;run:Run|null;goal:string;busy:boolean;act:Act;onRun:(work:Workspace)=>void}){
+ const [items,setItems]=useState<Contract[]>([]),[doc,setDoc]=useState<Contract|null>(null),[editor,setEditor]=useState(()=>JSON.stringify(starter(goal),null,2)),[reviewed,setReviewed]=useState(''),[bindingAck,setBindingAck]=useState(''),[assessment,setAssessment]=useState<Assessment|null>(null),[message,setMessage]=useState('');
+ const queued=useRef<{identity:string;key:string}|null>(null);
+ const creation=useRef<{input:string;key:string}|null>(null);
+ const identity=doc?`${doc.id}:${doc.revision}:${doc.digest}`:'',dirty=Boolean(doc&&editor!==JSON.stringify(doc.content,null,2));
+ const current=run&&assessment?.runId===run.id?assessment:null;
+ function select(value:Contract){setDoc(value);setEditor(JSON.stringify(value.content,null,2));setReviewed('');setBindingAck('');}
+ async function refresh(client:OwnerClient){
+  if(!run)return null;
+  try{return await client.call<Assessment>('GET',`/runs/${run.id}/acceptance`);}catch(e){if(e instanceof OwnerApiError&&e.status===404)return null;throw e;}
+ }
+ function load(){void act(async client=>{const [page,state]=await Promise.all([client.call<Page<Contract>>('GET',`/projects/${projectId}/requirements?limit=100`),refresh(client)]);return()=>{setItems(page.items);setAssessment(state);setMessage(page.nextCursor?'Showing the first 100 contracts; use the API cursor for more.':'Saved contracts loaded.');};});}
+ function save(){void act(async client=>{
+  let content:unknown;try{content=JSON.parse(editor);}catch{throw new Error('Enter valid contract JSON. No changes were saved.');}
+  if(creation.current?.input!==editor)creation.current={input:editor,key:crypto.randomUUID()};
+  const result=await client.call<Contract>(doc?'PATCH':'POST',doc?`/requirements/${doc.id}`:`/projects/${projectId}/requirements`,doc?{expectedRevision:doc.revision,content}:{content,idempotencyKey:creation.current.key});
+  return()=>{select(result);setItems(old=>[result,...old.filter(x=>x.id!==result.id)]);setMessage('Contract saved. Review this exact revision before binding it to a run.');};
+ });}
+ return <section className="panel"><h3>Outcome requirements and acceptance · P0.1</h3>
+  <p>Define what must be true for the goal to count as achieved. Run status describes technical execution; acceptance checks the reviewed criteria separately.</p>
+  <div className="actions"><button className="secondary" disabled={busy} onClick={load}>Load contracts and acceptance</button><button className="secondary" disabled={busy} onClick={()=>{creation.current=null;queued.current=null;setDoc(null);setEditor(JSON.stringify(starter(goal),null,2));setReviewed('');setBindingAck('');setMessage('New draft. Edit its goal, outcomes and evidence criteria.');}}>New outcome contract</button></div>
+  <div className="item-list">{items.map(item=><button className="secondary" key={item.id} disabled={busy} onClick={()=>void act(async client=>{const saved=await client.call<Contract>('GET',`/requirements/${item.id}`);return()=>select(saved);})}>{item.content.goal} · revision {item.revision} · {item.status}</button>)}</div>
+  {doc&&<><h4>{doc.content.goal}</h4><p className="identifier">{doc.id} · revision {doc.revision} · {doc.status}</p><ul>{doc.content.requirements.map(r=><li key={r.id}>{r.required?'Required':'Optional'}: {r.statement}</li>)}</ul><h4>Acceptance criteria</h4>{doc.content.acceptanceCriteria.map(c=><article className="job" key={c.id}><p>{c.required?'Required':'Optional'}: {c.description} · {c.evidenceKind}</p>{c.sourceStepKey&&<p>Recorded step: {c.sourceStepKey}</p>}{c.expected&&<pre>{JSON.stringify(c.expected,null,2)}</pre>}</article>)}{doc.content.questions.map(q=><p key={q} className="feedback">Unresolved: {q}</p>)}</>}
+  <details><summary>{doc?'Edit as a new revision':'Define the contract fields'}</summary><p>This first contract editor uses JSON. List requirements, inputs, outputs, assumptions, questions, constraints and capabilities. Link each requirement to declared capabilities with capabilityIds; missing links block P0.2 coverage. Each required requirement needs a required criterion. Evidence kinds are owner-review, job-result (with sourceStepKey), document-validation, artifact-registration and delivery-confirmation. The last three declare future checks only. This editor does not choose technologies or create jobs.</p><label>Outcome contract<textarea rows={20} value={editor} disabled={busy} onChange={e=>{setEditor(e.target.value);setReviewed('');setBindingAck('');}}/></label><button disabled={busy||!editor.trim()||Boolean(doc&&!dirty)} onClick={save}>{doc?'Save new revision':'Save contract draft'}</button></details>
+  {doc&&!dirty&&doc.status==='draft'&&<><label className="check"><input type="checkbox" disabled={busy||doc.content.questions.length>0} checked={reviewed===identity} onChange={e=>setReviewed(e.target.checked?identity:'')}/>I reviewed this exact requirements revision and its acceptance criteria. This grants no execution permission.</label><button disabled={busy||reviewed!==identity||doc.content.questions.length>0} onClick={()=>void act(async client=>{const saved=await client.call<Contract>('POST',`/requirements/${doc.id}/review`,{revision:doc.revision,reviewedDigest:doc.digest,acknowledgeRequirementsReview:true});return()=>{select(saved);setMessage('Requirements reviewed. No run or job was created.');};})}>Review requirements</button></>}
+  {doc&&doc.status==='reviewed'&&!dirty&&<button className="secondary" disabled={busy} onClick={()=>void act(async client=>{if(queued.current?.identity!==identity)queued.current={identity,key:crypto.randomUUID()};const created=await client.call<Run>('POST',`/projects/${projectId}/runs`,{idempotencyKey:queued.current.key});const work=await readWorkspace(client,created.id);return()=>{onRun(work);setMessage('Unplanned queued run opened. Bind the reviewed contract, then plan its capabilities. Repeating this action reopens the same run; use Start another run to begin a fresh intent.');};})}>Create or reopen unplanned run</button>}
+  {doc&&doc.status==='reviewed'&&!dirty&&<button className="secondary" disabled={busy} onClick={()=>{queued.current=null;setMessage('New run intent selected. Create an unplanned run when ready.');}}>Start another run</button>}
+  {run&&doc&&doc.status==='reviewed'&&!dirty&&<><p>Selected run: <span className="identifier">{run.id}</span>. Binding is immutable and must happen before preparation.</p><label className="check"><input type="checkbox" disabled={busy||run.status!=='queued'} checked={bindingAck===`${identity}:${run.id}:${run.version}`} onChange={e=>setBindingAck(e.target.checked?`${identity}:${run.id}:${run.version}`:'')}/>Bind this exact contract revision to this run. New bound runs use capability-first planning. Legacy manual plans do not certify requirement coverage.</label><button disabled={busy||bindingAck!==`${identity}:${run.id}:${run.version}`||run.status!=='queued'} onClick={()=>void act(async client=>{const state=await client.call<Assessment>('POST',`/runs/${run.id}/requirements`,{requirementsId:doc.id,revision:doc.revision,reviewedDigest:doc.digest,expectedRunVersion:run.version,acknowledgeBinding:true});return()=>{setAssessment(state);setBindingAck('');setMessage('Run now references the reviewed requirements snapshot.');};})}>Bind reviewed requirements</button></>}
+  {run&&!current&&<p>No acceptance assessment loaded for this run. Load its contract before preparation. Existing runs without a bound contract have no goal-success assessment.</p>}
+  {current&&<div className="draft"><h4>Goal assessment: {current.goalStatus}</h4><p>Technical run: {current.runStatus} · Required criteria: {current.criteriaStatus} · Bound requirements revision {current.requirements.revision}</p><p>Evidence never changes run status or grants execution. Owner observations are explicitly labelled; unavailable verifiers stay pending.</p>{current.criteria.map(c=><article className="job" key={c.id}><h4>{c.description}</h4><p>{c.required?'Required':'Optional'} · {c.evidenceKind} · {c.status} · evidence version {c.evidenceVersion}</p>{c.expected&&<pre>{JSON.stringify(c.expected,null,2)}</pre>}{c.evidence&&<pre>{JSON.stringify(c.evidence.details,null,2)}</pre>}<EvidenceForm key={`${current.runId}:${c.id}:${c.evidenceVersion}`} criterion={c} busy={busy||current.runStatus==='cancelled'} onSave={value=>void act(async client=>{const state=await client.call<Assessment>('POST',`/runs/${current.runId}/acceptance/evidence`,value);return()=>{setAssessment(state);setMessage('Evidence recorded for the bound revision.');};})}/></article>)}</div>}
+  {current&&run&&<CapabilityPlanPanel key={`${run.id}:${current.requirements.digest}`} run={run} digest={current.requirements.digest} busy={busy} act={act} onSaved={onRun}/>}
+  {current&&run&&<ExecutionEnvelopePanel key={`envelope:${run.id}`} run={run} busy={busy} act={act}/>}
+  {current&&run&&<EnvelopeWorkPanel key={`work:${run.id}`} run={run} busy={busy} act={act}/>}
+  {message&&<p role="status">{message}</p>}
+ </section>;
+}

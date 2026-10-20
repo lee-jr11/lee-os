@@ -1,0 +1,59 @@
+{
+  "name": "leeos",
+  "version": "0.18.1",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @leeos/hub",
+    "build": "npm run build -w @leeos/hub",
+    "start": "npm run start -w @leeos/hub",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck -w @leeos/hub",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "db:migrate": "tsx scripts/database.ts migrate",
+    "db:status": "tsx scripts/database.ts status",
+    "db:demo": "tsx scripts/database.ts demo",
+    "test:postgres": "tsx --test tests/postgres.integration.ts",
+    "db:configure": "tsx scripts/configure-local-database.ts",
+    "api:configure": "tsx scripts/configure-local-api.ts",
+    "api:demo": "tsx scripts/api-demo.ts",
+    "leeos": "tsx scripts/leeos.ts",
+    "plan:demo": "tsx scripts/planning-demo.ts",
+    "model:demo": "tsx scripts/model-demo.ts",
+    "execution:demo": "tsx scripts/execution-demo.ts",
+    "agent:demo": "tsx scripts/agent-demo.ts",
+    "provider:status": "tsx scripts/local-provider.ts status",
+    "provider:smoke": "tsx scripts/local-provider.ts smoke",
+    "test:provider": "tsx --test tests/provider-live.integration.ts",
+    "test:worker-live": "tsx --test tests/worker-live.integration.ts",
+    "coordinator": "tsx scripts/coordinator.ts",
+    "test:coordination-live": "tsx --test tests/coordination-live.integration.ts",
+    "request": "tsx scripts/request.ts",
+    "test:intake-live": "tsx --test tests/intake-live.integration.ts",
+    "test:hub-live": "tsx --test tests/hub-live.integration.ts",
+    "worker:envelopes": "tsx scripts/envelope-worker.ts",
+    "test:worker-process": "tsx --test tests/envelope-worker-process.integration.ts"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
+    "@types/node": "^22.19.0",
+    "@types/pg": "^8.15.6",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "^16.0.10",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.3"
+  },
+  "overrides": {
+    "nanoid": "3.3.11",
+    "es-abstract": "1.24.0"
+  }
+}

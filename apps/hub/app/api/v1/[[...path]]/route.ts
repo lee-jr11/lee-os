@@ -1,0 +1,10 @@
+import { coreApi } from '../../../../lib/core-api';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const GET = coreApi;
+export const POST = coreApi;
+export const PATCH = coreApi;
+export const PUT = coreApi;
+export const DELETE = coreApi;
+export const HEAD = coreApi;
+export const OPTIONS = coreApi;

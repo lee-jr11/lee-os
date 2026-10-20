@@ -1,0 +1,9 @@
+{
+  "expectedVersion": 0,
+  "acknowledgeScope": true,
+  "goal": "Draft and review a welcome message",
+  "steps": [
+    { "key": "draft", "title": "Draft a welcome message", "kind": "model", "dependsOn": [] },
+    { "key": "review", "title": "Owner reviews the message", "kind": "review", "dependsOn": ["draft"] }
+  ]
+}

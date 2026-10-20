@@ -1,0 +1,116 @@
+{
+  "goal": "Create and deliver a Bible lesson guide.",
+  "requirements": [
+    {
+      "id": "lesson",
+      "statement": "Generate a lesson from the supplied topic, theme or verse.",
+      "required": true,
+      "capabilityIds": [
+        "text_generation"
+      ]
+    },
+    {
+      "id": "document",
+      "statement": "Produce a valid DOCX with Times New Roman 12 pt body text.",
+      "required": true,
+      "capabilityIds": [
+        "document_generation"
+      ]
+    },
+    {
+      "id": "storage",
+      "statement": "Store and register the generated document.",
+      "required": true,
+      "capabilityIds": [
+        "artifact_storage"
+      ]
+    },
+    {
+      "id": "delivery",
+      "statement": "Confirm delivery through the approved V1 channel.",
+      "required": true,
+      "capabilityIds": [
+        "approved_delivery"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "topic",
+      "description": "Lee supplies the topic, theme or verse and required source text.",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "id": "guide",
+      "description": "A retrievable DOCX lesson guide."
+    }
+  ],
+  "assumptions": [],
+  "questions": [],
+  "constraints": [
+    "Times New Roman, 12 pt body text.",
+    "No automatic spending above $0."
+  ],
+  "capabilities": [
+    "text_generation",
+    "document_generation",
+    "artifact_storage",
+    "approved_delivery"
+  ],
+  "costPolicy": "ZERO_ONLY",
+  "acceptanceCriteria": [
+    {
+      "id": "content_recorded",
+      "description": "The content job has a recorded successful result; content quality needs its own review.",
+      "requirementIds": [
+        "lesson"
+      ],
+      "required": true,
+      "evidenceKind": "job-result",
+      "sourceStepKey": "draft"
+    },
+    {
+      "id": "document_valid",
+      "description": "The DOCX reopens and required body text is Times New Roman 12 pt.",
+      "requirementIds": [
+        "document"
+      ],
+      "required": true,
+      "evidenceKind": "document-validation",
+      "expected": {
+        "format": "docx",
+        "font_family": "Times New Roman",
+        "body_font_size_pt": 12
+      }
+    },
+    {
+      "id": "artifact_stored",
+      "description": "Document bytes exist at the registered artifact reference with matching integrity.",
+      "requirementIds": [
+        "storage"
+      ],
+      "required": true,
+      "evidenceKind": "artifact-registration",
+      "expected": {
+        "registered": true,
+        "bytes_retrievable": true,
+        "integrity_matches": true
+      }
+    },
+    {
+      "id": "delivery_confirmed",
+      "description": "Approved delivery is confirmed, not merely attempted.",
+      "requirementIds": [
+        "delivery"
+      ],
+      "required": true,
+      "evidenceKind": "delivery-confirmation",
+      "expected": {
+        "channel": "approved_v1_channel",
+        "delivery_confirmed": true
+      }
+    }
+  ]
+}

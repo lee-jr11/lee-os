@@ -1,0 +1,11 @@
+{
+  "name": "@leeos/executors",
+  "version": "0.18.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./python-docx": "./src/python-docx/index.ts"
+  },
+  "dependencies": {"zod": "^4.6.7"}
+}

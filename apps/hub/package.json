@@ -1,0 +1,19 @@
+{
+  "name": "@leeos/hub",
+  "version": "0.18.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build --webpack",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@leeos/core": "*",
+    "@leeos/ui": "*",
+    "next": "^16.0.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "@leeos/database": "*"
+  }
+}

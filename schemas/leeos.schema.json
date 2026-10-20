@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeeOS system manifest",
+  "type": "object",
+  "required": [
+    "systemId",
+    "name",
+    "version",
+    "structure",
+    "costPolicy",
+    "defaultExecution",
+    "hub",
+    "core",
+    "modules",
+    "plannedIntegrations",
+    "implemented",
+    "deferred"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "systemId": {
+      "const": "leeos"
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "structure": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18
+    },
+    "costPolicy": {
+      "const": "ZERO_ONLY"
+    },
+    "defaultExecution": {
+      "const": "disabled"
+    },
+    "hub": {
+      "type": "string"
+    },
+    "core": {
+      "type": "string"
+    },
+    "modules": {
+      "type": "object",
+      "required": [
+        "providers",
+        "executors",
+        "agents",
+        "automations",
+        "ui",
+        "database"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "plannedIntegrations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "implemented": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "deferred": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "implementationMilestone": {
+      "type": "string",
+      "pattern": "^P\\d+\\.\\d+$"
+    }
+  }
+}

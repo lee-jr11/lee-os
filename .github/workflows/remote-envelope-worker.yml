@@ -1,0 +1,116 @@
+name: LeeOS remote envelope worker
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Leave room for free managed PostgreSQL plans to autosuspend between idle polls.
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leeos-remote-envelope-worker
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    # Standard GitHub-hosted runners are free for public repositories. A
+    # private repository must never quietly consume its account's minutes.
+    if: >-
+      github.event.repository.visibility == 'public' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: leeos-remote-worker
+      deployment: false
+    steps:
+      - name: Check remote configuration without exposing secret values
+        id: config
+        env:
+          DATABASE_URL: ${{ secrets.LEEOS_REMOTE_DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          LEEOS_REMOTE_WORKER_ENABLED: ${{ vars.LEEOS_REMOTE_WORKER_ENABLED }}
+          LEEOS_GEMINI_PROVIDER_ENABLED: ${{ vars.LEEOS_GEMINI_PROVIDER_ENABLED }}
+          RESEND_FROM_EMAIL: ${{ vars.RESEND_FROM_EMAIL }}
+          LEEOS_RESEND_FREE_PLAN_CONFIRMED: ${{ vars.LEEOS_RESEND_FREE_PLAN_CONFIRMED }}
+          LEEOS_RESEND_PAYG_DISABLED: ${{ vars.LEEOS_RESEND_PAYG_DISABLED }}
+          LEEOS_RESEND_ZERO_COST_CONFIRMED_AT: ${{ vars.LEEOS_RESEND_ZERO_COST_CONFIRMED_AT }}
+        run: |
+          if [[ -n "$DATABASE_URL" && "$LEEOS_REMOTE_WORKER_ENABLED" == "1" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$LEEOS_GEMINI_PROVIDER_ENABLED" == "1" && -n "$GEMINI_API_KEY" && -n "$GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "gemini_enabled=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "gemini_enabled=0" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -n "$RESEND_API_KEY" && -n "$RESEND_FROM_EMAIL" && "$LEEOS_RESEND_FREE_PLAN_CONFIRMED" == "1" && "$LEEOS_RESEND_PAYG_DISABLED" == "1" && -n "$LEEOS_RESEND_ZERO_COST_CONFIRMED_AT" ]]; then
+            echo "resend_enabled=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "resend_enabled=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Explain disabled configuration without reading secrets
+        if: ${{ steps.config.outputs.configured != 'true' }}
+        run: echo "Remote worker is idle. Explicitly set LEEOS_REMOTE_WORKER_ENABLED=1 and configure LEEOS_REMOTE_DATABASE_URL in the leeos-remote-worker environment to enable it."
+
+      - name: Explain optional Gemini route without reading secrets
+        if: ${{ steps.config.outputs.configured == 'true' && steps.config.outputs.gemini_enabled != '1' }}
+        run: echo "Gemini routing is disabled. Explicitly set LEEOS_GEMINI_PROVIDER_ENABLED=1 and configure both Gemini credentials before enabling this route. Non-AI envelope work can still run."
+
+      - name: Explain optional email route without reading secrets
+        if: ${{ steps.config.outputs.configured == 'true' && steps.config.outputs.resend_enabled != '1' }}
+        run: echo "Resend email delivery is disabled because provider credentials or the current free-plan/no-overage owner attestation are not configured."
+
+      - name: Check out trusted default-branch code
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Set up Python DOCX runtime
+        if: ${{ steps.config.outputs.configured == 'true' && vars.LEEOS_ARTIFACT_STORAGE_ENABLED == '1' }}
+        uses: actions/setup-python@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned DOCX dependency
+        if: ${{ steps.config.outputs.configured == 'true' && vars.LEEOS_ARTIFACT_STORAGE_ENABLED == '1' }}
+        run: python -m pip install --disable-pip-version-check -r requirements-python.txt
+
+      - name: Install locked dependencies
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        run: npm ci
+
+      - name: Claim and process at most one accepted envelope
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.LEEOS_REMOTE_DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ vars.RESEND_FROM_EMAIL }}
+          LEEOS_RESEND_FREE_PLAN_CONFIRMED: ${{ vars.LEEOS_RESEND_FREE_PLAN_CONFIRMED }}
+          LEEOS_RESEND_PAYG_DISABLED: ${{ vars.LEEOS_RESEND_PAYG_DISABLED }}
+          LEEOS_RESEND_ZERO_COST_CONFIRMED_AT: ${{ vars.LEEOS_RESEND_ZERO_COST_CONFIRMED_AT }}
+          LEEOS_ENVELOPE_WORKER_ENABLED: '1'
+          LEEOS_GEMINI_PROVIDER_ENABLED: ${{ steps.config.outputs.gemini_enabled }}
+          LEEOS_LOCAL_PROVIDER_ENABLED: '0'
+          LEEOS_LOCAL_PROVIDER_LOCAL_ONLY: '0'
+          LEEOS_ARTIFACT_STORAGE_ENABLED: ${{ vars.LEEOS_ARTIFACT_STORAGE_ENABLED }}
+          LEEOS_RESEND_EMAIL_ENABLED: ${{ steps.config.outputs.resend_enabled }}
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run worker:envelopes -- once

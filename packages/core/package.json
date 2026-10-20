@@ -1,0 +1,33 @@
+{
+  "name": "@leeos/core",
+  "version": "0.18.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api/index.ts",
+    "./model-router": "./src/model-router/index.ts",
+    "./execution-manager": "./src/execution-manager/index.ts",
+    "./agent-manager": "./src/agent-manager/index.ts",
+    "./provider-manager": "./src/provider-manager/public.ts",
+    "./job-worker": "./src/job-worker/index.ts",
+    "./scheduler": "./src/scheduler/index.ts",
+    "./request-intake": "./src/request-intake/index.ts",
+    "./requirements": "./src/requirements/index.ts",
+    "./capability-planning": "./src/orchestrator/capability-plan.ts",
+    "./execution-envelope": "./src/execution-envelope/index.ts",
+    "./envelope-worker": "./src/envelope-worker/index.ts",
+    "./storage-manager": "./src/storage-manager/index.ts",
+    "./document-manager": "./src/document-manager/index.ts",
+    "./lifecycle": "./src/lifecycle/index.ts",
+    "./memory-manager": "./src/memory-manager/index.ts",
+    "./command-center": "./src/command-center/index.ts"
+  },
+  "dependencies": {
+    "@leeos/database": "*",
+    "zod": "^4.6.7",
+    "@leeos/providers": "*",
+    "@leeos/executors": "*",
+    "@leeos/agents": "*"
+  }
+}
