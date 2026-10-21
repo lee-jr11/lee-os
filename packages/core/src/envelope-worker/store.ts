@@ -27,7 +27,7 @@ async function load(tx:SqlSession,id:string):Promise<Context>{
  const body=row.envelope as Envelope;
  if(body.schemaVersion!=='1'||body.costPolicy.maxSpendUsd!==0||body.constraints.spendLimitUsd!==0||body.constraints.externalEffects!==(body.operations.some(o=>o.kind==='email.send')?'approved-email-only':'none')||body.operations.some(o=>{
   if(o.operationVersion!=='1')return true;
-  if(o.kind==='owner.review')return o.implementationContractVersion!=='owner-review-request-1';
+  if(o.kind==='owner.review')return !['owner-review-request-1','owner-review-request-2'].includes(o.implementationContractVersion);
   if(o.kind==='docx.generate')return o.implementationContractVersion!=='python-docx-1'||(o.selectedImplementation as {implementationId?:string}).implementationId!=='python-document'||(o.validatorImplementation as {implementationId?:string}|undefined)?.implementationId!=='python-docx-validator'||(o.storageImplementation as {implementationId?:string}|undefined)?.implementationId!=='artifact-service'||o.output?.format!=='docx'||o.output?.mediaType!=='application/vnd.openxmlformats-officedocument.wordprocessingml.document'||o.consumptionMaxBytes!==8192;
   if(o.kind==='email.send')return o.implementationContractVersion!=='resend-email-1'||(o.selectedImplementation as {implementationId?:string;providerId?:string}).implementationId!=='email-delivery'||(o.selectedImplementation as {providerId?:string}).providerId!=='resend'||o.permission!=='external:email-send'||body.constraints.location!=='remote'||body.constraints.network!=='provider-allowlist-only'||body.constraints.externalEffects!=='approved-email-only'||o.deliveryPolicy!=='verified-zero-only'||o.output?.type!=='external-effect'||o.output?.format!=='email';
   const selected=o.selectedImplementation as {providerId?:string;modelId?:string};
@@ -97,7 +97,19 @@ async function resolveEmail(tx:SqlSession,op:Operation,c:Context){
 function reviewMaterial(c:Context,op:Operation){
  if(op.kind!=='owner.review')throw new StateConflict('Human review required.');
  const inputs=op.inputs.map(input=>resolve(input,c));
- return {operationKey:op.key,inputs,digest:envelopeDigest({envelopeId:c.row.id,operationKey:op.key,inputs})};
+ const artifactReferences=op.artifacts??[];
+ const artifacts=artifactReferences.map(reference=>{
+  const document=c.body.operations.find(candidate=>candidate.key===reference.operationKey),result=c.ops.find(candidate=>candidate.operation_key===reference.operationKey);
+  const validation=result?.output_validation as {sha256?:unknown;bytes?:unknown}|null|undefined;
+  const artifactId=result?.output_artifact_id,sha256=result?.output_sha256,sizeBytes=Number(validation?.bytes);
+  if(document?.kind!=='docx.generate'||result?.state!=='succeeded'||typeof artifactId!=='string'||typeof sha256!=='string'||validation?.sha256!==sha256||!Number.isSafeInteger(sizeBytes)||sizeBytes<1){
+   throw new StateConflict('The owner review requires a successfully validated and retrieved DOCX artifact.');
+  }
+  return {artifactId,name:document.name,mediaType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',sha256,sizeBytes,
+   downloadPath:`/artifacts/${artifactId}/content`};
+ });
+ const digestInput=op.implementationContractVersion==='owner-review-request-2'?{envelopeId:c.row.id,operationKey:op.key,inputs,artifacts}:{envelopeId:c.row.id,operationKey:op.key,inputs};
+ return {operationKey:op.key,inputs,artifacts,digest:envelopeDigest(digestInput)};
 }
 type MailEvent={providerEventId:string;kind:'accepted'|'delivered'|'failed'|'ignored';emailId:string|null;effectId:string|null;recipient:string|null;eventType:string};
 function recipientHash(address:string){return createHash('sha256').update(address.trim().toLowerCase()).digest('hex');}
@@ -305,6 +317,7 @@ export function createEnvelopeWorkerStore(db:StateDatabase,options:{leaseMs?:num
      const c=await load(tx,claim.envelopeId);await owns(tx,c,claim);const current=required(c.ops.find(r=>r.operation_key===action.op.key));
      if(current.state!=='reserved'||String(current.dispatch_fence)!==claim.fence||!sameContent(current.resolved_request,action.request))throw new LeaseLost('Reserved DOCX request or current fence changed.');
      await tx.query("UPDATE envelope_operations SET state='succeeded',output_artifact_id=$3,output_sha256=$4,output_validation=$5,result_fence=$6,updated_at=clock_timestamp() WHERE envelope_id=$1 AND operation_key=$2",[claim.envelopeId,action.op.key,stored.artifact.id,stored.validation.sha256,JSON.stringify(stored.validation),claim.fence]);
+     await evidence(tx,c,action.op,'met');
      for(const binding of c.body.acceptanceBindings.filter(b=>b.operationKey===action.op.key)){
       const criterion=c.body.contract.content.acceptanceCriteria.find(item=>item.id===binding.criterionId);if(!criterion||!['document-validation','artifact-registration'].includes(criterion.evidenceKind))continue;
       const kind=criterion.evidenceKind,key='envelope-docx:'+claim.envelopeId+':'+action.op.key+':'+criterion.id;
@@ -432,6 +445,16 @@ export function createEnvelopeWorkerStore(db:StateDatabase,options:{leaseMs?:num
    if(prior){if(!sameContent(prior.request,input))throw new StateConflict('A different human decision already exists.');return {recorded:true};}
    if(c.work.state!=='waiting-human'||await authority(tx,c)||input.reviewedEnvelopeDigest!==c.row.digest)throw new StateConflict('Review the active exact envelope.');
    const op=c.body.operations.find(op=>op.key===input.operationKey);if(!op||op.kind!=='owner.review'||c.ops.find(r=>r.operation_key===op.key)?.state!=='pending'||reviewMaterial(c,op).digest!==input.reviewedInputDigest)throw new StateConflict('Review the exact current output.');
+   for(const reference of op.artifacts??[]){
+    const document=c.body.operations.find(candidate=>candidate.key===reference.operationKey),result=c.ops.find(candidate=>candidate.operation_key===reference.operationKey),artifactId=result?.output_artifact_id;
+    if(document?.kind!=='docx.generate'||result?.state!=='succeeded'||typeof artifactId!=='string')throw new StateConflict('The review artifact is not complete.');
+    const sizeBytes=Number((result.output_validation as {bytes?:unknown}|null)?.bytes);
+    const retrieved=(await tx.query<{present:boolean}>(`SELECT EXISTS(SELECT 1 FROM events
+     WHERE project_id=$1 AND run_id=$2 AND kind='artifact.retrieved' AND entity_id=$3
+      AND occurred_at>$4 AND payload->>'sha256'=$5 AND payload->>'sizeBytes'=$6) AS present`,
+     [c.run.project_id,c.run.id,artifactId,result.updated_at,String(result.output_sha256),String(sizeBytes)])).rows[0]?.present===true;
+    if(!retrieved)throw new StateConflict('Retrieve and verify the exact DOCX artifact in the Hub before recording owner review.');
+   }
    await tx.query('INSERT INTO envelope_reviews(envelope_id,operation_key,run_id,request) VALUES($1,$2,$3,$4)',[id,op.key,c.run.id,JSON.stringify(input)]);
    await tx.query('UPDATE envelope_operations SET state=$3,error_code=$4,updated_at=clock_timestamp() WHERE envelope_id=$1 AND operation_key=$2',[id,op.key,input.approve?'succeeded':'failed',input.approve?null:'OWNER_REJECTED']);
    await evidence(tx,c,op,input.approve?'met':'not-met',input.note);await event(tx,c,'envelope-operation.owner-reviewed',{operationKey:op.key,approved:input.approve});

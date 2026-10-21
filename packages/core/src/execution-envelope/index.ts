@@ -14,6 +14,7 @@ const textLeaf=z.discriminatedUnion('source',[
  z.strictObject({source:z.literal('operation-output'),operationKey:key,output:z.literal('text')})
 ]);
 const textInput=z.union([textLeaf,z.strictObject({source:z.literal('text-parts'),parts:z.array(textLeaf).min(1).max(20),separator:z.string().max(32)})]);
+const operationArtifact=z.strictObject({source:z.literal('operation-artifact'),operationKey:key});
 const common={key,requirementIds:z.array(key).min(1).max(50),dependsOn:z.array(key).max(50)};
 const docxDocument=z.strictObject({title:textInput,sections:z.array(z.strictObject({heading:textInput,paragraphs:z.array(textInput).min(1).max(40)})).min(1).max(30)});
 const docxName=z.string().trim().min(6).max(180).regex(/^[\p{L}\p{N}][^\p{Cc}\p{Cf}<>:"/\\|?*]*\.docx$/u).refine(v=>!/[. ]\.docx$/i.test(v),'Unsafe DOCX filename.');
@@ -29,7 +30,7 @@ export const envelopeDraft=z.strictObject({
  ]),
  operations:z.array(z.discriminatedUnion('kind',[
   z.strictObject({...common,kind:z.literal('text.generate'),input:textInput,maxOutputTokens:z.number().int().min(1).max(128),modelFingerprint:digest}),
-  z.strictObject({...common,kind:z.literal('owner.review'),inputs:z.array(textInput).min(1).max(20)}),
+  z.strictObject({...common,kind:z.literal('owner.review'),inputs:z.array(textInput).min(1).max(20),artifacts:z.array(operationArtifact).max(10).default([])}),
   z.strictObject({...common,kind:z.literal('docx.generate'),name:docxName,document:docxDocument}),
   z.strictObject({...common,kind:z.literal('email.send'),to:emailAddress,subject:textInput,text:textInput,attachments:z.array(z.strictObject({source:z.literal('operation-artifact'),operationKey:key})).max(10).default([]),deliveryPolicy:z.literal('verified-zero-only')})
  ])).min(1).max(50),
@@ -67,17 +68,21 @@ export function compileEnvelope(run:{id:string;projectId:string;version:number},
  const operations=draft.operations,byKey=new Map(operations.map(o=>[o.key,o]));
  if(byKey.size!==operations.length)blockers.push('DUPLICATE_OPERATION_KEYS');
  const refs=(o:typeof operations[number])=>operationInputs(o).flatMap(v=>v.source==='text-parts'?v.parts:[v]);
+ const artifactRefs=(o:typeof operations[number])=>o.kind==='owner.review'?o.artifacts:[];
  for(const input of content.inputs)if(input.required&&!Object.hasOwn(draft.contractInputs,input.id))blockers.push('CONTRACT_INPUT_MISSING:'+input.id);
  for(const id of Object.keys(draft.contractInputs))if(!content.inputs.some(i=>i.id===id))blockers.push('UNKNOWN_CONTRACT_INPUT:'+id);
  for(const input of content.inputs.filter(i=>i.required))if(!operations.some(o=>refs(o).some(ref=>ref.source==='contract-input'&&ref.inputId===input.id)))blockers.push('CONTRACT_INPUT_UNUSED:'+input.id);
  for(const o of operations){
   if(new Set(o.dependsOn).size!==o.dependsOn.length||o.dependsOn.some(k=>k===o.key||!byKey.has(k)))blockers.push('INVALID_DEPENDENCY:'+o.key);
   if(new Set(o.requirementIds).size!==o.requirementIds.length||o.requirementIds.some(id=>!content.requirements.some(r=>r.id===id)))blockers.push('INVALID_REQUIREMENT_SCOPE:'+o.key);
+  for(const ref of artifactRefs(o))if(!o.dependsOn.includes(ref.operationKey)||byKey.get(ref.operationKey)?.kind!=='docx.generate')blockers.push('INVALID_ARTIFACT_BINDING:'+o.key);
   const capability=capabilityFor(o.kind),need=p.capabilities.find(n=>n.id===capability);
   if(!need||need.route.status!=='selected'||!need.route.selected)blockers.push('CAPABILITY_NOT_SELECTED:'+o.key);
   if(o.requirementIds.some(id=>{
    const r=content.requirements.find(r=>r.id===id);
-   return !r?.capabilityIds?.includes(capability)&&!(o.kind==='owner.review'&&content.acceptanceCriteria.some(c=>c.evidenceKind==='owner-review'&&c.requirementIds.includes(id)))&&!(o.kind==='docx.generate'&&r?.capabilityIds?.some(id=>['artifact_storage','document_generation'].includes(id)));
+   const textProducers=o.kind==='docx.generate'?operations.filter(producer=>producer.kind==='text.generate'&&producer.requirementIds.includes(id)):[];
+   const assemblesText=textProducers.length>0&&textProducers.every(producer=>refs(o).some(ref=>ref.source==='operation-output'&&ref.operationKey===producer.key));
+   return !r?.capabilityIds?.includes(capability)&&!(o.kind==='owner.review'&&content.acceptanceCriteria.some(c=>c.evidenceKind==='owner-review'&&c.requirementIds.includes(id)))&&!(o.kind==='docx.generate'&&(assemblesText||r?.capabilityIds?.some(id=>['artifact_storage','document_generation'].includes(id))));
   }))blockers.push('OPERATION_SCOPE_MISMATCH:'+o.key);
   for(const ref of refs(o))if(ref.source==='operation-output'&&(!o.dependsOn.includes(ref.operationKey)||byKey.get(ref.operationKey)?.kind!=='text.generate'))blockers.push('INVALID_OUTPUT_BINDING:'+o.key);
   for(const ref of refs(o))if(ref.source==='contract-input'&&!Object.hasOwn(draft.contractInputs,ref.inputId))blockers.push('INVALID_CONTRACT_INPUT_BINDING:'+o.key);
@@ -144,6 +149,14 @@ export function compileEnvelope(run:{id:string;projectId:string;version:number},
    if(op.kind!=='email.send')blockers.push('EMAIL_DELIVERY_CONFIRMATION_REQUIRED:'+c.id);
   }else blockers.push('VERIFIER_UNSUPPORTED:'+c.id);
  }
+ for(const review of operations.filter((o):o is Extract<typeof operations[number],{kind:'owner.review'}>=>o.kind==='owner.review')){
+  const isRequiredReview=draft.acceptanceBindings.some(binding=>binding.operationKey===review.key&&content.acceptanceCriteria.some(c=>c.id===binding.criterionId&&c.required&&c.evidenceKind==='owner-review'));
+  if(isRequiredReview){
+   for(const document of operations.filter((o):o is Extract<typeof operations[number],{kind:'docx.generate'}>=>o.kind==='docx.generate')){
+    if(!review.artifacts.some(ref=>ref.operationKey===document.key))blockers.push('OWNER_REVIEW_ARTIFACT_REQUIRED:'+review.key+':'+document.key);
+   }
+  }
+ }
  for(const op of operations.filter(o=>o.kind==='docx.generate')){
   const kinds=draft.acceptanceBindings.filter(binding=>binding.operationKey===op.key).map(binding=>content.acceptanceCriteria.find(c=>c.id===binding.criterionId)?.evidenceKind);
   if(!kinds.includes('document-validation')||!kinds.includes('artifact-registration'))blockers.push('DOCX_ACCEPTANCE_EVIDENCE_REQUIRED:'+op.key);
@@ -160,7 +173,7 @@ export function compileEnvelope(run:{id:string;projectId:string;version:number},
   contract:p.contract,routing:{planDigest:draft.reviewedPlanDigest,planRunVersion:planVersion,plan:p},
   constraints:draft.constraints,contractInputs:draft.contractInputs,
   operations:ordered.map(o=>{const route=p.capabilities.find(n=>n.id===capabilityFor(o.kind))!.route;return {...o,capabilityId:capabilityFor(o.kind),selectedImplementation:route.selected,
-   operationVersion:'1',implementationContractVersion:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?'gemini-free-text-1':'local-text-1'):o.kind==='owner.review'?'owner-review-request-1':o.kind==='docx.generate'?'python-docx-1':'resend-email-1',
+   operationVersion:'1',implementationContractVersion:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?'gemini-free-text-1':'local-text-1'):o.kind==='owner.review'?(o.artifacts.length?'owner-review-request-2':'owner-review-request-1'):o.kind==='docx.generate'?'python-docx-1':'resend-email-1',
    permission:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?'remote:gemini-free-text':'local:text'):o.kind==='owner.review'?'owner:review-request':o.kind==='docx.generate'?'document:generate-docx':'external:email-send',requiresHuman:o.kind==='owner.review',
    ...(o.kind==='text.generate'&&'modelDecision' in route?{modelScope:route.modelDecision?.request}:{}),
    ...(o.kind==='docx.generate'?{validatorImplementation:p.capabilities.find(n=>n.id==='document_validation')?.route.selected,storageImplementation:p.capabilities.find(n=>n.id==='artifact_storage')?.route.selected}:{}),

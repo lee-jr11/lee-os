@@ -28,7 +28,7 @@ export async function envelopeFixture(db:StateDatabase,content:RequirementsConte
  const draft:EnvelopeDraft={expectedRunVersion:0,reviewedPlanDigest:planDigest(run.id,0,saved.plan),grantExpiresAt:new Date(now.getTime()+3600000).toISOString(),
   contractInputs:{prompt:' \nExact fixture prompt; do not generate in this test.  '},constraints:location==='remote'?{location:'remote',network:'provider-allowlist-only',externalEffects:'none',maxAttempts:1,maxInputBytes:8192,spendLimitUsd:0}:{location:'local',network:'loopback-only',externalEffects:'none',maxAttempts:1,maxInputBytes:8192,spendLimitUsd:0},
   operations:[{key:'draft',kind:'text.generate',requirementIds:['content'],dependsOn:[],input:{source:'contract-input',inputId:'prompt'},maxOutputTokens:32,modelFingerprint:fingerprint},
-   {key:'review',kind:'owner.review',requirementIds:['content'],dependsOn:['draft'],inputs:[{source:'operation-output',operationKey:'draft',output:'text'}]}],
+   {key:'review',kind:'owner.review',requirementIds:['content'],dependsOn:['draft'],inputs:[{source:'operation-output',operationKey:'draft',output:'text'}],artifacts:[]}],
   acceptanceBindings:[{criterionId:'generated',operationKey:'draft'},{criterionId:'reviewed',operationKey:'review'}]};
  const manager=createEnvelopeManager(db,{now:()=>now});
  return {state,requirements,project,run,doc,saved,now,draft,manager,fixture};

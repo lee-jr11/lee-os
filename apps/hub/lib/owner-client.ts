@@ -4,6 +4,7 @@ export class OwnerApiError extends Error {
   super(messages[code]??'The action could not be completed. Refresh to inspect its saved state before retrying.');
  }
 }
+export type OwnerArtifactDownload={artifactId:string;name:string;mediaType:string;sha256:string;sizeBytes:number};
 // The key exists only in this connection instance. Never persist it or attach it to URLs.
 export class OwnerClient {
  #token:string;#origin:string;#closed=false;#pending=new Set<AbortController>();
@@ -24,6 +25,24 @@ export class OwnerClient {
    if(!response.ok)throw new OwnerApiError(response.status,typeof envelope.error?.code==='string'?envelope.error.code:'REQUEST_FAILED');
    if(this.#closed)throw new OwnerApiError(401,'UNAUTHORIZED');
    return envelope.data as T;
+  }catch(error){if(this.#closed)throw new OwnerApiError(401,'UNAUTHORIZED');if(error instanceof OwnerApiError)throw error;throw new OwnerApiError(0,'CONNECTION_LOST');}finally{clearTimeout(timeout);this.#pending.delete(controller);}
+ }
+ async downloadArtifact(artifact:OwnerArtifactDownload):Promise<Blob>{
+  if(this.#closed)throw new OwnerApiError(401,'UNAUTHORIZED');
+  if(!/^file_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(artifact.artifactId)||
+   !/^[a-f0-9]{64}$/.test(artifact.sha256)||!Number.isSafeInteger(artifact.sizeBytes)||artifact.sizeBytes<1||
+   !/^[\p{L}\p{N}][^\p{Cc}\p{Cf}<>:"/\\|?*]*\.docx$/u.test(artifact.name)||artifact.mediaType!=='application/vnd.openxmlformats-officedocument.wordprocessingml.document')throw new OwnerApiError(400,'INVALID_REQUEST');
+  const url=new URL(`/api/v1/artifacts/${artifact.artifactId}/content`,this.#origin);
+  const controller=new AbortController();this.#pending.add(controller);const timeout=setTimeout(()=>controller.abort(),45000);
+  try{
+   const response=await this.transport(url.toString(),{method:'GET',headers:{Authorization:`Bearer ${this.#token}`},credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});
+   if(!response.ok){let envelope;try{envelope=await response.json();}catch{throw new OwnerApiError(response.status,'RESPONSE_UNREADABLE');}
+    throw new OwnerApiError(response.status,typeof envelope.error?.code==='string'?envelope.error.code:'REQUEST_FAILED');}
+   const bytes=await response.arrayBuffer(),etag=`"sha256-${artifact.sha256}"`,actualSize=Number(response.headers.get('Content-Length')),
+    mediaType=response.headers.get('Content-Type')?.split(';',1)[0]?.trim().toLowerCase(),actualEtag=response.headers.get('ETag'),actualSha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
+   if(this.#closed)throw new OwnerApiError(401,'UNAUTHORIZED');
+   if(bytes.byteLength!==artifact.sizeBytes||actualSize!==artifact.sizeBytes||mediaType!==artifact.mediaType||actualEtag!==etag||actualSha!==artifact.sha256)throw new OwnerApiError(409,'ARTIFACT_INTEGRITY_FAILURE');
+   return new Blob([bytes],{type:artifact.mediaType});
   }catch(error){if(this.#closed)throw new OwnerApiError(401,'UNAUTHORIZED');if(error instanceof OwnerApiError)throw error;throw new OwnerApiError(0,'CONNECTION_LOST');}finally{clearTimeout(timeout);this.#pending.delete(controller);}
  }
 }
