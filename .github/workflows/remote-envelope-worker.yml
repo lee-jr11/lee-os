@@ -2,6 +2,11 @@ name: LeeOS remote envelope worker
 
 on:
   workflow_dispatch:
+    inputs:
+      envelope_id:
+        description: Exact accepted envelope ID to process
+        required: true
+        type: string
   schedule:
     # Leave room for free managed PostgreSQL plans to autosuspend between idle polls.
     - cron: '*/15 * * * *'
@@ -10,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: leeos-remote-envelope-worker
+  group: ${{ github.event_name == 'workflow_dispatch' && format('leeos-envelope-{0}', inputs.envelope_id) || 'leeos-remote-envelope-worker-scheduled' }}
   cancel-in-progress: false
 
 jobs:
@@ -112,5 +117,11 @@ jobs:
           LEEOS_LOCAL_PROVIDER_LOCAL_ONLY: '0'
           LEEOS_ARTIFACT_STORAGE_ENABLED: ${{ vars.LEEOS_ARTIFACT_STORAGE_ENABLED }}
           LEEOS_RESEND_EMAIL_ENABLED: ${{ steps.config.outputs.resend_enabled }}
+          LEEOS_WORKER_ENVELOPE_ID: ${{ inputs.envelope_id }}
           NEXT_TELEMETRY_DISABLED: '1'
-        run: npm run worker:envelopes -- once
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            npm run worker:envelopes -- once --envelope-id "$LEEOS_WORKER_ENVELOPE_ID"
+          else
+            npm run worker:envelopes -- once
+          fi
