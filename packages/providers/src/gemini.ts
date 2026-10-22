@@ -12,7 +12,7 @@ const modelEndpoint='https://generativelanguage.googleapis.com/v1beta/models/';
 const maxEvidenceAgeMs=60_000;
 
 export class GeminiProviderError extends Error{
- constructor(readonly code:string){super('Gemini provider preflight or response validation failed.');}
+ constructor(readonly code:string,readonly retryable=false){super('Gemini provider preflight or response validation failed.');}
 }
 export type GeminiTransport=(url:string,init:RequestInit)=>Promise<Response>;
 export type GeminiCredentials={apiKey:string;serviceAccountJson:string};
@@ -88,10 +88,10 @@ export function createGeminiAdapter(options:{credentials:()=>GeminiCredentials|u
   if(info.billingEnabled||Boolean(info.billingAccountName))throw new GeminiProviderError('GEMINI_BILLING_ENABLED');
   return {projectNumber,accountScope:'google-project-'+projectNumber,evidenceRef:'google-project-billing-disabled',projectId:info.projectId};
  }
- async function google<T>(url:string,method:'GET'|'POST',apiKey:string,signal:AbortSignal|undefined,body?:unknown,schema?:z.ZodType<T>,code='GEMINI_PROTOCOL_ERROR'):Promise<T>{
+ async function google<T>(url:string,method:'GET'|'POST',apiKey:string,signal:AbortSignal|undefined,body?:unknown,schema?:z.ZodType<T>,code='GEMINI_PROTOCOL_ERROR',retryUnavailable=false):Promise<T>{
   let response:Response;try{response=await transport(url,{method,redirect:'error',signal:requestSignal(signal),headers:{Accept:'application/json','x-goog-api-key':apiKey,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});}
   catch{throw new GeminiProviderError('GEMINI_CONNECTION_FAILED');}
-  if(!response.ok)throw new GeminiProviderError(url.endsWith(':countTokens')&&response.status===429?'GEMINI_RATE_LIMITED':'GEMINI_HTTP_'+response.status);
+  if(!response.ok)throw new GeminiProviderError(url.endsWith(':countTokens')&&response.status===429?'GEMINI_RATE_LIMITED':'GEMINI_HTTP_'+response.status,retryUnavailable&&response.status===503);
   const raw=await readJson(response);return schema?parse(schema,raw,code):raw as T;
  }
  async function probe(signal?:AbortSignal):Promise<Probe>{
@@ -117,7 +117,7 @@ export function createGeminiAdapter(options:{credentials:()=>GeminiCredentials|u
   async revalidate(fingerprint:string,signal?:AbortSignal){const current=await probe(signal);if(current.fingerprint!==fingerprint)throw new GeminiProviderError('GEMINI_MODEL_CHANGED');return current;},
   async generate(prompt:string,maxOutputTokens:number,signal?:AbortSignal){
    const {apiKey}=credentials();
-   const result=await google(modelEndpoint+geminiModelId+':generateContent','POST',apiKey,signal,{contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0,maxOutputTokens}},generation,'GEMINI_USAGE_INVALID');
+   const result=await google(modelEndpoint+geminiModelId+':generateContent','POST',apiKey,signal,{contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0,maxOutputTokens}},generation,'GEMINI_USAGE_INVALID',true);
    const usage=result.usageMetadata,outputTokens=usage.candidatesTokenCount+(usage.thoughtsTokenCount??0),inputTokens=usage.promptTokenCount;
    if(inputTokens+outputTokens>usage.totalTokenCount||outputTokens>maxOutputTokens)throw new GeminiProviderError('GEMINI_USAGE_MISMATCH');
    const text=result.candidates[0].content.parts.map(part=>part.text).join('');if(!text.trim()||Buffer.byteLength(text,'utf8')>65536)throw new GeminiProviderError('GEMINI_OUTPUT_INVALID');

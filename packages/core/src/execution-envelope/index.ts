@@ -6,6 +6,21 @@ import type {CapabilityPlan} from '../orchestrator/capability-plan';
 
 const key=z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 const digest=z.string().regex(/^[a-f0-9]{64}$/);
+export const gemini503RetryPolicy={
+ maxProviderAttempts:2,
+ retryableReason:'GEMINI_HTTP_503',
+ maxAutomaticRetries:1,
+ backoff:{strategy:'exponential',baseDelayMs:5000,maxDelayMs:30000},
+ revalidateBeforeRetry:{costPolicy:'ZERO_ONLY',billing:true,modelFingerprint:true},
+ retryCallIdentity:'new-durable-call-per-attempt',
+ uncertainOutcome:'recovery-required-no-retry'
+} as const;
+const gemini503RetryPolicySchema=z.strictObject({
+ maxProviderAttempts:z.literal(2),retryableReason:z.literal('GEMINI_HTTP_503'),maxAutomaticRetries:z.literal(1),
+ backoff:z.strictObject({strategy:z.literal('exponential'),baseDelayMs:z.literal(5000),maxDelayMs:z.literal(30000)}),
+ revalidateBeforeRetry:z.strictObject({costPolicy:z.literal('ZERO_ONLY'),billing:z.literal(true),modelFingerprint:z.literal(true)}),
+ retryCallIdentity:z.literal('new-durable-call-per-attempt'),uncertainOutcome:z.literal('recovery-required-no-retry')
+});
 export const envelopeId=z.string().regex(/^env_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 const text=z.string().min(1).max(8192).refine(v=>Buffer.byteLength(v,'utf8')<=8192);
 const textLeaf=z.discriminatedUnion('source',[
@@ -29,7 +44,7 @@ export const envelopeDraft=z.strictObject({
   z.strictObject({location:z.literal('remote'),network:z.literal('provider-allowlist-only'),externalEffects:z.literal('approved-email-only'),maxAttempts:z.literal(1),maxInputBytes:z.literal(8192),spendLimitUsd:z.literal(0)})
  ]),
  operations:z.array(z.discriminatedUnion('kind',[
-  z.strictObject({...common,kind:z.literal('text.generate'),input:textInput,maxOutputTokens:z.number().int().min(1).max(128),modelFingerprint:digest}),
+  z.strictObject({...common,kind:z.literal('text.generate'),input:textInput,maxOutputTokens:z.number().int().min(1).max(128),modelFingerprint:digest,providerRetryPolicy:gemini503RetryPolicySchema.optional()}),
   z.strictObject({...common,kind:z.literal('owner.review'),inputs:z.array(textInput).min(1).max(20),artifacts:z.array(operationArtifact).max(10).default([])}),
   z.strictObject({...common,kind:z.literal('docx.generate'),name:docxName,document:docxDocument}),
   z.strictObject({...common,kind:z.literal('email.send'),to:emailAddress,subject:textInput,text:textInput,attachments:z.array(z.strictObject({source:z.literal('operation-artifact'),operationKey:key})).max(10).default([]),deliveryPolicy:z.literal('verified-zero-only')})
@@ -121,6 +136,7 @@ export function compileEnvelope(run:{id:string;projectId:string;version:number},
    if(!selected||selected.implementationId!=='model-router'||!('providerId' in selected)||!(selected.providerId==='llamacpp-local'||selected.providerId==='gemini')||!(selected.modelId==='leeos-local'||selected.modelId==='gemini-3.1-flash-lite')||!((selected.providerId==='llamacpp-local'&&selected.modelId==='leeos-local')||(selected.providerId==='gemini'&&selected.modelId==='gemini-3.1-flash-lite')))blockers.push('IMPLEMENTATION_UNSUPPORTED:'+o.key);
    if(!local&&!gemini)blockers.push('EXECUTION_LOCATION_PROVIDER_MISMATCH:'+o.key);
    if(!model||model.status!=='selected'||model.costPolicy!=='ZERO_ONLY'||!model.selected||model.selected.providerId!==providerId||model.selected.modelId!==modelId||model.request.capabilities.length!==1||model.request.capabilities[0]!=='text'||o.maxOutputTokens>model.request.outputTokens)blockers.push('MODEL_SCOPE_MISMATCH:'+o.key);
+   if(o.providerRetryPolicy&&(!gemini||providerId!=='gemini'))blockers.push('RETRY_POLICY_REQUIRES_GEMINI:'+o.key);
   }else if(o.kind==='owner.review'){
    if(need?.route.selected?.implementationId!=='local-owner')blockers.push('IMPLEMENTATION_UNSUPPORTED:'+o.key);
   }else if(o.kind==='docx.generate'&&need?.route.selected?.implementationId!=='python-document')blockers.push('IMPLEMENTATION_UNSUPPORTED:'+o.key);
@@ -173,13 +189,13 @@ export function compileEnvelope(run:{id:string;projectId:string;version:number},
   contract:p.contract,routing:{planDigest:draft.reviewedPlanDigest,planRunVersion:planVersion,plan:p},
   constraints:draft.constraints,contractInputs:draft.contractInputs,
   operations:ordered.map(o=>{const route=p.capabilities.find(n=>n.id===capabilityFor(o.kind))!.route;return {...o,capabilityId:capabilityFor(o.kind),selectedImplementation:route.selected,
-   operationVersion:'1',implementationContractVersion:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?'gemini-free-text-1':'local-text-1'):o.kind==='owner.review'?(o.artifacts.length?'owner-review-request-2':'owner-review-request-1'):o.kind==='docx.generate'?'python-docx-1':'resend-email-1',
+   operationVersion:'1',implementationContractVersion:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?(o.providerRetryPolicy?'gemini-free-text-2':'gemini-free-text-1'):'local-text-1'):o.kind==='owner.review'?(o.artifacts.length?'owner-review-request-2':'owner-review-request-1'):o.kind==='docx.generate'?'python-docx-1':'resend-email-1',
    permission:o.kind==='text.generate'?(route.selected&&'providerId' in route.selected&&route.selected.providerId==='gemini'?'remote:gemini-free-text':'local:text'):o.kind==='owner.review'?'owner:review-request':o.kind==='docx.generate'?'document:generate-docx':'external:email-send',requiresHuman:o.kind==='owner.review',
    ...(o.kind==='text.generate'&&'modelDecision' in route?{modelScope:route.modelDecision?.request}:{}),
    ...(o.kind==='docx.generate'?{validatorImplementation:p.capabilities.find(n=>n.id==='document_validation')?.route.selected,storageImplementation:p.capabilities.find(n=>n.id==='artifact_storage')?.route.selected}:{}),
    output:o.kind==='text.generate'?{type:'text',maxBytes:65536}:o.kind==='owner.review'?{type:'owner-decision'}:o.kind==='docx.generate'?{type:'artifact',format:'docx',mediaType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',maxBytes:10485760}:{type:'external-effect',format:'email',provider:'resend',confirmation:'recipient-server-delivery'},consumptionMaxBytes:8192};}),
   acceptanceBindings:draft.acceptanceBindings,acceptanceStatus:'pending',
-  authorization:{authority:'local-owner',scope:'exact-envelope-only',expiresAt:draft.grantExpiresAt,maxAttempts:1,attemptScope:'per-operation',noFallback:true},
+  authorization:{authority:'local-owner',scope:'exact-envelope-only',expiresAt:draft.grantExpiresAt,maxAttempts:Math.max(1,...operations.filter((o):o is Extract<typeof operations[number],{kind:'text.generate'}>=>o.kind==='text.generate').map(o=>o.providerRetryPolicy?.maxProviderAttempts??1)),attemptScope:'per-operation',noFallback:true},
   costPolicy:{policy:'ZERO_ONLY',maxSpendUsd:0,paidFallbackEnabled:false,revalidationRequiredBeforeDispatch:true},
   dispatch:{enabledAtAcceptance:false,requiredGate:'INDEPENDENT_WORKER_AND_FRESH_ZERO_COST_EVIDENCE',revalidate:['run-and-revocation','grant-expiry','cost-and-availability','model-fingerprint','resolved-input-size-and-tokens']},
   idempotency:{scope:'one-envelope-per-run',operationKeys:ordered.map(o=>o.key),retries:'same-envelope-identity-only'}};

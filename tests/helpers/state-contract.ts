@@ -6,14 +6,14 @@ export async function exerciseState(db: StateDatabase, t: TestContext) {
  const store = createStateStore(db);
  await t.test('migrations are repeatable and checksum-protected', async () => {
   assert.equal((await checkDatabase(db)).status,'migration-required');
-  assert.deepEqual(await migrate(db),['001_state.sql','002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);
+  assert.deepEqual(await migrate(db),['001_state.sql','002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);
   assert.equal((await checkDatabase(db)).status,'ready');
   assert.deepEqual(await migrate(db),[]);
   const files = await readMigrations();
   await assert.rejects(migrate(db,[{ ...files[0], sql: files[0].sql + '\n-- changed' }]),/history differs/);
   await assert.rejects(migrate(db,[...files,{ name: '012_bad.sql', sql: 'CREATE TABLE never_committed (id int); SELECT * FROM table_that_does_not_exist;' }]));
   assert.equal((await db.query<{ value: string | null }>("SELECT to_regclass('never_committed')::text AS value")).rows[0].value,null);
-  assert.equal((await db.query('SELECT * FROM schema_migrations')).rows.length,17);
+  assert.equal((await db.query('SELECT * FROM schema_migrations')).rows.length,18);
  });
  await t.test('permanent IDs survive rename; names are parameterized data', async () => {
   const project = await store.createProject('Original');

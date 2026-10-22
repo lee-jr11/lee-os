@@ -1,5 +1,5 @@
 import type { SqlSession } from './types';
-export const expectedMigrations = ['001_state.sql','002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql'];
+export const expectedMigrations = ['001_state.sql','002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql'];
 export const latestMigration = expectedMigrations.at(-1)!;
 export async function checkDatabase(db: SqlSession): Promise<{ status: 'ready' | 'migration-required' | 'unavailable' }> {
  try {

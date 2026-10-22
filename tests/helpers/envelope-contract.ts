@@ -6,6 +6,7 @@ import {createRequirementsManager} from '../../packages/core/src/requirements/st
 import {createPlanner} from '../../packages/core/src/orchestrator/store';
 import {createEnvelopeManager} from '../../packages/core/src/execution-envelope/store';
 import {compileEnvelope,envelopeDigest,type EnvelopeDraft} from '../../packages/core/src/execution-envelope';
+import {gemini503RetryPolicy} from '../../packages/core/src/execution-envelope';
 import {createExecutionManager} from '../../packages/core/src/execution-manager/store';
 import {planDigest} from '../../packages/core/src/execution-manager';
 import {createLocalAdapter} from '../../packages/providers/src/local';
@@ -19,7 +20,7 @@ export const envelopeRequirements:RequirementsContent={goal:'Draft a message and
  inputs:[{id:'prompt',description:'Exact owner prompt',required:true}],outputs:[{id:'message',description:'Generated text'}],assumptions:[],questions:[],constraints:[],capabilities:['text_generation'],costPolicy:'ZERO_ONLY',
  acceptanceCriteria:[{id:'generated',description:'Recorded successful generation',required:true,requirementIds:['content'],evidenceKind:'job-result',sourceStepKey:'draft'},
   {id:'reviewed',description:'Owner checks the requested message',required:true,requirementIds:['content'],evidenceKind:'owner-review'}]};
-export async function envelopeFixture(db:StateDatabase,content:RequirementsContent=envelopeRequirements,route?:{provider:ProviderDescriptor;fingerprint:string;location:'local'|'remote'}){
+export async function envelopeFixture(db:StateDatabase,content:RequirementsContent=envelopeRequirements,route?:{provider:ProviderDescriptor;fingerprint:string;location:'local'|'remote'},retryable503=false){
  const state=createStateStore(db),requirements=createRequirementsManager(db),project=await state.createProject('P0.3 '+randomUUID()),run=await state.createRun(project.id);
  const doc=await requirements.create(project.id,{content,idempotencyKey:randomUUID()});await requirements.review(doc.id,{revision:1,reviewedDigest:doc.digest,acknowledgeRequirementsReview:true});
  await requirements.bind(run.id,{requirementsId:doc.id,revision:1,reviewedDigest:doc.digest,expectedRunVersion:0,acknowledgeBinding:true});
@@ -27,7 +28,7 @@ export async function envelopeFixture(db:StateDatabase,content:RequirementsConte
  const saved=await createPlanner(db,{routing:()=>({registry:[provider],now})}).create(run.id,{mode:'capability-first',expectedRunVersion:0,reviewedRequirementsDigest:doc.digest,modelBudget:{inputTokens:128,outputTokens:64}});
  const draft:EnvelopeDraft={expectedRunVersion:0,reviewedPlanDigest:planDigest(run.id,0,saved.plan),grantExpiresAt:new Date(now.getTime()+3600000).toISOString(),
   contractInputs:{prompt:' \nExact fixture prompt; do not generate in this test.  '},constraints:location==='remote'?{location:'remote',network:'provider-allowlist-only',externalEffects:'none',maxAttempts:1,maxInputBytes:8192,spendLimitUsd:0}:{location:'local',network:'loopback-only',externalEffects:'none',maxAttempts:1,maxInputBytes:8192,spendLimitUsd:0},
-  operations:[{key:'draft',kind:'text.generate',requirementIds:['content'],dependsOn:[],input:{source:'contract-input',inputId:'prompt'},maxOutputTokens:32,modelFingerprint:fingerprint},
+  operations:[{key:'draft',kind:'text.generate',requirementIds:['content'],dependsOn:[],input:{source:'contract-input',inputId:'prompt'},maxOutputTokens:32,modelFingerprint:fingerprint,...(retryable503?{providerRetryPolicy:gemini503RetryPolicy}:{})},
    {key:'review',kind:'owner.review',requirementIds:['content'],dependsOn:['draft'],inputs:[{source:'operation-output',operationKey:'draft',output:'text'}],artifacts:[]}],
   acceptanceBindings:[{criterionId:'generated',operationKey:'draft'},{criterionId:'reviewed',operationKey:'review'}]};
  const manager=createEnvelopeManager(db,{now:()=>now});

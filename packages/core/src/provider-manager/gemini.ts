@@ -11,6 +11,7 @@ import {localGenerateRequest,recoverLocalRequest,type ProviderExecutionScope} fr
 const zeroCostRetries=new Set(['GEMINI_RATE_LIMITED']);
 const view=(row:Row)=>({id:row.id,idempotencyKey:row.request_key,providerId:row.provider_id,modelId:row.model_id,status:row.status,version:row.version,
  text:row.output_text,inputTokens:row.input_tokens,outputTokens:row.output_tokens,errorCode:row.error_code,recoveryRequired:row.recovery_required,
+ retryable:row.retryable===true,
  costStatus:row.usage_cost_status??null,costEvidenceRef:row.cost_evidence_ref??null,
  createdAt:new Date(row.created_at as string|Date).toISOString(),finishedAt:row.finished_at?new Date(row.finished_at as string|Date).toISOString():null});
 const recoverGemini=z.strictObject({callId:recoverLocalRequest.shape.callId,expectedVersion:recoverLocalRequest.shape.expectedVersion,acknowledgeRemoteRequestFinished:z.literal(true)});
@@ -98,12 +99,14 @@ export function createGeminiProviderManager(options:{enabled:()=>boolean;adapter
     });return view(row);
    }catch(error){
     const code=safeCode(error);
+    const retryable=dispatched&&error instanceof GeminiProviderError&&error.retryable&&code==='GEMINI_HTTP_503';
+    const interrupted=dispatched&&!retryable;
     const row=await db.transaction(async tx=>{
      await tx.query('SELECT * FROM provider_slots WHERE id=$1 FOR UPDATE',[geminiProviderId]);
-     const saved=(await tx.query('UPDATE provider_calls SET status=$2,version=version+1,error_code=$3,recovery_required=$4,finished_at=clock_timestamp() WHERE id=$1 AND status=$5 RETURNING *',
-      [id,dispatched?'interrupted':'failed',code,dispatched,'running'])).rows[0];if(!saved)throw new Error('Provider call state changed.');
-     await event(tx,id,dispatched?'provider.call-interrupted':'provider.call-failed',{errorCode:code});
-     if(!dispatched)await tx.query('UPDATE provider_slots SET call_id=NULL WHERE id=$1 AND call_id=$2',[geminiProviderId,id]);return saved;
+     const saved=(await tx.query('UPDATE provider_calls SET status=$2,version=version+1,error_code=$3,recovery_required=$4,retryable=$5,finished_at=clock_timestamp() WHERE id=$1 AND status=$6 RETURNING *',
+      [id,interrupted?'interrupted':'failed',code,interrupted,retryable,'running'])).rows[0];if(!saved)throw new Error('Provider call state changed.');
+     await event(tx,id,interrupted?'provider.call-interrupted':retryable?'provider.call-transient-failure':'provider.call-failed',{errorCode:code,retryable});
+     if(!interrupted)await tx.query('UPDATE provider_slots SET call_id=NULL WHERE id=$1 AND call_id=$2',[geminiProviderId,id]);return saved;
     });return view(row);
    }finally{active.delete(id);}
   },
