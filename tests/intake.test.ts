@@ -33,8 +33,7 @@ test('intake API enforces auth and strict non-execution bodies before storage; p
 test('intake migration, transactional contract and clean-close history restore',{timeout:120000},async t=>{
  const root=resolve('.leeos/tests');await mkdir(root,{recursive:true});const directory=await mkdtemp(join(root,'leeos-intake-'));let db=await createEmbeddedDatabase(directory);
  try{
-  await migrate(db,(await readMigrations()).slice(0,7));assert.deepEqual(await migrate(db),['008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);await exerciseIntake(db,t);
+  await migrate(db,(await readMigrations()).slice(0,7));assert.deepEqual(await migrate(db),['008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);await exerciseIntake(db,t);
   const requests=(await db.query('SELECT * FROM intake_requests ORDER BY id')).rows,revisions=(await db.query('SELECT * FROM intake_revisions ORDER BY request_id,version')).rows,approvals=(await db.query('SELECT * FROM intake_approvals ORDER BY request_id')).rows;
   await db.close();db=await createEmbeddedDatabase(directory);assert.deepEqual((await db.query('SELECT * FROM intake_requests ORDER BY id')).rows,requests);assert.deepEqual((await db.query('SELECT * FROM intake_revisions ORDER BY request_id,version')).rows,revisions);assert.deepEqual((await db.query('SELECT * FROM intake_approvals ORDER BY request_id')).rows,approvals);
- }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-intake-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
-});
+ }fi

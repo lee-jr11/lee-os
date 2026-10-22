@@ -9,7 +9,7 @@ import { exerciseWorker } from './helpers/worker-contract';
 test('controlled worker upgrade, execution and restored results',{timeout:120000},async t=>{
  const root=resolve('.leeos/tests');await mkdir(root,{recursive:true});const directory=await mkdtemp(join(root,'leeos-worker-'));let db=await createEmbeddedDatabase(directory);
  try{
-  await migrate(db,(await readMigrations()).slice(0,5));assert.deepEqual(await migrate(db),['006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);await exerciseWorker(db,t);
+  await migrate(db,(await readMigrations()).slice(0,5));assert.deepEqual(await migrate(db),['006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);await exerciseWorker(db,t);
   const saved=(await db.query('SELECT * FROM job_executions ORDER BY job_id')).rows;
   await db.close();db=await createEmbeddedDatabase(directory);assert.deepEqual((await db.query('SELECT * FROM job_executions ORDER BY job_id')).rows,saved);
  }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-worker-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}

@@ -26,7 +26,7 @@ test('planning persistence and additive upgrade',async t=>{
  try {
   const files=await readMigrations();await migrate(db,files.slice(0,1));
   await db.query("INSERT INTO projects(id,name) VALUES('proj_12345678-1234-4234-8234-123456789abc','Before upgrade')");
-  assert.deepEqual(await migrate(db),['002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);
+  assert.deepEqual(await migrate(db),['002_plans.sql','003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);
   assert.equal((await db.query("SELECT name FROM projects WHERE name='Before upgrade'")).rows.length,1);
   await exercisePlanning(db,t);
  }finally{await db.close();}

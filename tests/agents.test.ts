@@ -42,21 +42,7 @@ test('agent contract, additive upgrade and durable assignments',{timeout:120000}
   const execution=createExecutionManager(db),preview=await execution.inspect(run.id);
   const prepInput={expectedRunVersion:0,reviewedPlanDigest:preview.planDigest,acknowledgePlanReview:true,mode:'prepare-only',permissions:[]};
   const preparation=await execution.prepare(run.id,prepInput);
-  assert.deepEqual(await migrate(db),['004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);
+  assert.deepEqual(await migrate(db),['004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);
   assert.deepEqual(await execution.prepare(run.id,prepInput),preparation);
   const agents=createAgentManager(db),role=await agents.registerRole({name:'Durable writer',purpose:'Draft',stepKinds:['model'],permissions:[],idempotencyKey:'durable-writer'});
-  const job=(await store.listJobs(run.id)).items[0],input={roleId:role.id,expectedRunVersion:0,reviewedPlanDigest:preview.planDigest,permissions:[],mode:'assignment-only'};
-  const saved=await agents.assign(run.id,job.id,input);await exerciseAgents(db,t);
-  await db.close();db=await createEmbeddedDatabase(directory);
-  await t.test('role snapshots, scoped agent IDs and status survive clean-close restore',async()=>{
-   assert.deepEqual(await migrate(db),[]);const reopened=createAgentManager(db);
-   assert.deepEqual(await reopened.assign(run.id,job.id,input),saved);
-   assert.deepEqual(await reopened.getRole(String(role.id)),role);
-   assert.equal((await reopened.forJob(run.id,job.id)).currentStatus,'planned');
-  });
- }finally{
-  await db.close();const absolute=resolve(directory);
-  if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-agents-'))throw Error('Refusing cleanup outside test directory.');
-  await rm(absolute,{recursive:true,force:true});
- }
-});
+  const job=(await store.listJobs(run.id)).items[0],input={roleId:role.id,expectedRunVersion:0,reviewedPl

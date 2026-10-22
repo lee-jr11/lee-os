@@ -38,12 +38,11 @@ test('local endpoints require owner authentication, explicit opt-in and strict b
 test('local calls, upgrade and clean-close ledger durability',{timeout:120000},async t=>{
  const root=resolve('.leeos/tests');await mkdir(root,{recursive:true});const directory=await mkdtemp(join(root,'leeos-provider-'));let db=await createEmbeddedDatabase(directory);
  try{
-  const files=await readMigrations();await migrate(db,files.slice(0,4));assert.deepEqual(await migrate(db),['005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);
+  const files=await readMigrations();await migrate(db,files.slice(0,4));assert.deepEqual(await migrate(db),['005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);
   await exerciseLocalProvider(db,t);
   const fixture=fixtureTransport(),manager=createLocalProviderManager({enabled:()=>true,adapter:createLocalAdapter(fixture.transport)});
   const input={prompt:'Durable provider result',maxOutputTokens:16,idempotencyKey:'durable-result'};const result=await manager.generate(db,input);
   await db.close();db=await createEmbeddedDatabase(directory);
   const reopened=createLocalProviderManager({enabled:()=>true,adapter:createLocalAdapter(async()=>{throw Error('Replay must not contact provider');})});
   assert.deepEqual(await reopened.generate(db,input),result);
- }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-provider-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
-});
+ }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-provider-'))throw E

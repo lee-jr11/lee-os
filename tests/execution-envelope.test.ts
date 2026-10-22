@@ -39,17 +39,8 @@ test('P0.3 additive upgrade, exact acceptance and recovery after database/proces
  const root=resolve('.leeos/tests');await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,'leeos-envelopes-'));let db=await createEmbeddedDatabase(dir);
  try{
   await migrate(db,(await readMigrations()).slice(0,9));const old=await envelopeFixture(db),legacyRun=await old.state.getRun(old.run.id),legacyEvents=await old.state.listEvents(old.project.id);
-  assert.deepEqual(await migrate(db),['010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql']);assert.deepEqual(await old.state.getRun(old.run.id),legacyRun);assert.deepEqual(await old.state.listEvents(old.project.id),legacyEvents);assert.deepEqual(await createPlanner(db).get(old.run.id),old.saved);
+  assert.deepEqual(await migrate(db),['010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);assert.deepEqual(await old.state.getRun(old.run.id),legacyRun);assert.deepEqual(await old.state.listEvents(old.project.id),legacyEvents);assert.deepEqual(await createPlanner(db).get(old.run.id),old.saved);
   await exerciseEnvelopes(db,t);
   const f=await envelopeFixture(db),input=await authorizedInput(f),before=await f.manager.accept(f.run.id,input);
   await db.close();db=await createEmbeddedDatabase(dir);assert.deepEqual(await migrate(db),[]);
-  const recovered=await createEnvelopeManager(db).forRun(f.run.id);assert.deepEqual(recovered,before);assert.equal(recovered.digest,envelopeDigest(recovered.envelope));
-  assert.equal((await createStateStore(db).listJobs(f.run.id)).items.length,0);
-  assert.deepEqual(await createEnvelopeManager(db).accept(f.run.id,input),before);
-  const origin='http://127.0.0.1:3000',token='a'.repeat(64);
-  const response=await handleCoreRequest(new Request(`${origin}/api/v1/execution-envelopes/${before.id}`,{headers:{Host:'127.0.0.1:3000',Authorization:'Bearer '+token}}),{origin,token,database:()=>db});
-  assert.equal(response.status,200);assert.deepEqual((await response.json()).data,before);
-  const oldEnvelope=(await createEnvelopeManager(db).accept(old.run.id,await authorizedInput({...old,manager:createEnvelopeManager(db)}))).envelope;
-  assert.equal(oldEnvelope.contract.revision,1);
- }finally{await db.close();const absolute=resolve(dir);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-envelopes-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
-});
+  const recovered=await createEnvelope
