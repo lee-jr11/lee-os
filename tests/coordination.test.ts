@@ -34,4 +34,8 @@ test('coordination API rejects execution authority, unsupported clocks, auth and
 test('coordination upgrade, transactional contract and restored receipts',{timeout:120000},async t=>{
  const root=resolve('.leeos/tests');await mkdir(root,{recursive:true});const directory=await mkdtemp(join(root,'leeos-coordination-'));let db=await createEmbeddedDatabase(directory);
  try{
-  await migrate(db,(await readMigrations()).slice(0,6));assert.deepEqual(await migrate(db),['007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_tran
+  await migrate(db,(await readMigrations()).slice(0,6));assert.deepEqual(await migrate(db),['007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);await exerciseCoordination(db,t);
+  const receipts=(await db.query('SELECT * FROM trigger_receipts ORDER BY id')).rows;await db.close();db=await createEmbeddedDatabase(directory);
+  assert.deepEqual((await db.query('SELECT * FROM trigger_receipts ORDER BY id')).rows,receipts);assert.deepEqual(await migrate(db),[]);
+ }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-coordination-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
+});

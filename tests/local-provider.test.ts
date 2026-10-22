@@ -45,4 +45,5 @@ test('local calls, upgrade and clean-close ledger durability',{timeout:120000},a
   await db.close();db=await createEmbeddedDatabase(directory);
   const reopened=createLocalProviderManager({enabled:()=>true,adapter:createLocalAdapter(async()=>{throw Error('Replay must not contact provider');})});
   assert.deepEqual(await reopened.generate(db,input),result);
- }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-provider-'))throw E
+ }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-provider-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
+});

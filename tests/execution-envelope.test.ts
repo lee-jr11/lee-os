@@ -43,4 +43,13 @@ test('P0.3 additive upgrade, exact acceptance and recovery after database/proces
   await exerciseEnvelopes(db,t);
   const f=await envelopeFixture(db),input=await authorizedInput(f),before=await f.manager.accept(f.run.id,input);
   await db.close();db=await createEmbeddedDatabase(dir);assert.deepEqual(await migrate(db),[]);
-  const recovered=await createEnvelope
+  const recovered=await createEnvelopeManager(db).forRun(f.run.id);assert.deepEqual(recovered,before);assert.equal(recovered.digest,envelopeDigest(recovered.envelope));
+  assert.equal((await createStateStore(db).listJobs(f.run.id)).items.length,0);
+  assert.deepEqual(await createEnvelopeManager(db).accept(f.run.id,input),before);
+  const origin='http://127.0.0.1:3000',token='a'.repeat(64);
+  const response=await handleCoreRequest(new Request(`${origin}/api/v1/execution-envelopes/${before.id}`,{headers:{Host:'127.0.0.1:3000',Authorization:'Bearer '+token}}),{origin,token,database:()=>db});
+  assert.equal(response.status,200);assert.deepEqual((await response.json()).data,before);
+  const oldEnvelope=(await createEnvelopeManager(db).accept(old.run.id,await authorizedInput({...old,manager:createEnvelopeManager(db)}))).envelope;
+  assert.equal(oldEnvelope.contract.revision,1);
+ }finally{await db.close();const absolute=resolve(dir);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-envelopes-'))throw Error('Unsafe cleanup');await rm(absolute,{recursive:true,force:true});}
+});

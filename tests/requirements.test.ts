@@ -44,4 +44,9 @@ test('P0.1 requirements/evidence contracts and clean-close persistence',{timeout
   const legacyStore=createStateStore(db),legacyProject=await legacyStore.createProject('Before P0.1'),legacyRun=await legacyStore.createRun(legacyProject.id),legacyHistory=await legacyStore.listEvents(legacyProject.id);
   assert.deepEqual(await migrate(db),['009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);assert.deepEqual(await createStateStore(db).getRun(legacyRun.id),legacyRun);assert.deepEqual(await createStateStore(db).listEvents(legacyProject.id),legacyHistory);
   await exerciseRequirements(db,t);
-  const project=await createStateStore(db).createProject('Requirements persistence'),manager=createRequirementsManager(db),doc=await manager.create(proj
+  const project=await createStateStore(db).createProject('Requirements persistence'),manager=createRequirementsManager(db),doc=await manager.create(project.id,{content:ownerRequirements,idempotencyKey:'persist'});await manager.review(doc.id,{revision:1,reviewedDigest:doc.digest,acknowledgeRequirementsReview:true});
+  const run=await createStateStore(db).createRun(project.id);await manager.bind(run.id,{requirementsId:doc.id,revision:1,reviewedDigest:doc.digest,expectedRunVersion:0,acknowledgeBinding:true});
+  const before=await manager.recordEvidence(run.id,{kind:'owner-review',criterionId:'accepted',expectedEvidenceVersion:0,idempotencyKey:'persist',outcome:'met',note:'Retain this observation',acknowledgeOwnerReview:true});
+  await db.close();db=await createEmbeddedDatabase(directory);assert.deepEqual(await migrate(db),[]);assert.deepEqual(await createRequirementsManager(db).assessment(run.id),before);
+ }finally{await db.close();const absolute=resolve(directory);if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-requirements-'))throw Error('Unsafe test cleanup');await rm(absolute,{recursive:true,force:true});}
+});

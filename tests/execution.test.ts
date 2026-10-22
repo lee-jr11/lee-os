@@ -48,4 +48,20 @@ test('job preparation contract, additive upgrade and durable receipts',{timeout:
   const files=await readMigrations();await migrate(db,files.slice(0,2));
   const store=createStateStore(db);const project=await store.createProject('Before preparation upgrade');const run=await store.createRun(project.id);
   await seedLegacyPlan(db,run.id,{expectedRunVersion:0,goal:'Durable preparation',steps:[{key:'review',title:'Review',kind:'review'}]});
-  assert.deepEqual(await migrate(db),['003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_recei
+  assert.deepEqual(await migrate(db),['003_preparations.sql','004_agent_assignments.sql','005_local_provider.sql','006_job_execution.sql','007_coordination.sql','008_request_intake.sql','009_requirements.sql','010_execution_envelopes.sql','011_envelope_workers.sql','012_remote_gemini.sql','013_artifact_storage.sql','014_docx_operations.sql','015_email_effect_receipts.sql','016_calendar_scheduling.sql','017_lifecycle_memory.sql','018_gemini_transient_retries.sql']);
+  const manager=createExecutionManager(db),preview=await manager.inspect(run.id);
+  const input={expectedRunVersion:0,reviewedPlanDigest:preview.planDigest,acknowledgePlanReview:true,mode:'prepare-only',permissions:[]};
+  const saved=await manager.prepare(run.id,input);await exerciseExecution(db,t);
+  await db.close();db=await createEmbeddedDatabase(directory);
+  await t.test('receipt, immutable blueprint and job IDs survive clean-close restore',async()=>{
+   assert.deepEqual(await migrate(db),[]);const reopened=createExecutionManager(db);
+   assert.deepEqual((await reopened.inspect(run.id)).preparation,saved);
+   assert.deepEqual(await reopened.prepare(run.id,input),saved);
+   assert.equal((await createStateStore(db).listJobs(run.id)).items.length,1);
+  });
+ }finally{
+  await db.close();const absolute=resolve(directory);
+  if(!absolute.startsWith(root+sep)||!absolute.split(sep).at(-1)?.startsWith('leeos-execution-'))throw Error('Refusing cleanup outside test directory.');
+  await rm(absolute,{recursive:true,force:true});
+ }
+});
