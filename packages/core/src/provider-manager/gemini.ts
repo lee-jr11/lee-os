@@ -9,6 +9,9 @@ import {ApiError} from '../api/errors';
 import {localGenerateRequest,recoverLocalRequest,type ProviderExecutionScope} from './index';
 
 const zeroCostRetries=new Set(['GEMINI_RATE_LIMITED']);
+const preflightTimeoutMs=30_000;
+const generationTimeoutMs=60_000;
+function withTimeout(callerSignal:AbortSignal|undefined,timeoutMs:number){const timeout=AbortSignal.timeout(timeoutMs);return callerSignal?AbortSignal.any([callerSignal,timeout]):timeout;}
 const view=(row:Row)=>({id:row.id,idempotencyKey:row.request_key,providerId:row.provider_id,modelId:row.model_id,status:row.status,version:row.version,
  text:row.output_text,inputTokens:row.input_tokens,outputTokens:row.output_tokens,errorCode:row.error_code,recoveryRequired:row.recovery_required,
  retryable:row.retryable===true,
@@ -68,9 +71,9 @@ export function createGeminiProviderManager(options:{enabled:()=>boolean;adapter
    });
    if(reserved.replay)return view(reserved.row);
    const id=String(reserved.row.id);active.add(id);let dispatched=false;
-   const signal=callerSignal?AbortSignal.any([callerSignal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000);
+   const preflightSignal=withTimeout(callerSignal,preflightTimeoutMs);
    try{
-    const initial=await adapter.probe(signal),tokens=await adapter.tokenize(input.prompt,signal),fresh=await adapter.probe(signal);
+    const initial=await adapter.probe(preflightSignal),tokens=await adapter.tokenize(input.prompt,preflightSignal),fresh=await adapter.probe(preflightSignal);
     if(initial.fingerprint!==fresh.fingerprint)throw new GeminiProviderError('GEMINI_MODEL_CHANGED');
     const decision=routeModel({capabilities:['text'],inputTokens:tokens,outputTokens:input.maxOutputTokens},{registry:[fresh.provider]});
     if(decision.status!=='selected')throw new GeminiProviderError(decision.evaluations.flatMap(e=>e.reasons).find(reason=>reason.includes('COST'))??'GEMINI_ZERO_COST_UNVERIFIED');
@@ -82,10 +85,11 @@ export function createGeminiProviderManager(options:{enabled:()=>boolean;adapter
     });
     // Repeat the live project billing and model check after the dispatch-intent
     // transaction, immediately before the single generation request.
-    const final=await adapter.revalidate(fresh.fingerprint,signal),finalRoute=routeModel({capabilities:['text'],inputTokens:tokens,outputTokens:input.maxOutputTokens},{registry:[final.provider]});
+    const final=await adapter.revalidate(fresh.fingerprint,preflightSignal),finalRoute=routeModel({capabilities:['text'],inputTokens:tokens,outputTokens:input.maxOutputTokens},{registry:[final.provider]});
     if(finalRoute.status!=='selected')throw new GeminiProviderError('GEMINI_ZERO_COST_UNVERIFIED');
-    assertEnabled();signal.throwIfAborted();dispatched=true;
-    const result=await adapter.generate(input.prompt,input.maxOutputTokens,signal);
+    assertEnabled();preflightSignal.throwIfAborted();
+    const generationSignal=withTimeout(callerSignal,generationTimeoutMs);generationSignal.throwIfAborted();dispatched=true;
+    const result=await adapter.generate(input.prompt,input.maxOutputTokens,generationSignal);
     const row=await db.transaction(async tx=>{
      await tx.query('SELECT * FROM provider_slots WHERE id=$1 FOR UPDATE',[geminiProviderId]);
      if(result.inputTokens!==tokens)throw new GeminiProviderError('GEMINI_USAGE_MISMATCH');

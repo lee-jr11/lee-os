@@ -65,6 +65,18 @@ test('only a received Gemini generation HTTP 503 is classified as retryable',asy
  await assert.rejects(tokenization503.adapter.tokenize('bounded prompt'),(error:unknown)=>error instanceof GeminiProviderError&&error.code==='GEMINI_HTTP_503'&&!error.retryable);
 });
 
+test('Gemini preflight and token counting keep the short timeout while generation gets its dedicated longer timeout',async()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(AbortSignal,'timeout');assert.ok(descriptor?.value);
+ const timeouts:number[]=[];
+ Object.defineProperty(AbortSignal,'timeout',{...descriptor,value:(milliseconds:number)=>{timeouts.push(milliseconds);return descriptor.value.call(AbortSignal,milliseconds);}});
+ try{
+  const f=fixture();await f.adapter.probe();await f.adapter.tokenize('bounded prompt');await f.adapter.generate('bounded prompt',16);
+ }finally{Object.defineProperty(AbortSignal,'timeout',descriptor);}
+ assert.equal(timeouts.length,7);
+ assert.ok(timeouts.slice(0,6).every(milliseconds=>milliseconds===12_000));
+ assert.equal(timeouts[6],60_000);
+});
+
 test('an API key without an exact Gemini-only service restriction cannot become a route',async()=>{
  const f=fixture(false,'generativelanguage.googleapis.com,compute.googleapis.com');
  await assert.rejects(f.adapter.probe(),(error:unknown)=>error instanceof GeminiProviderError&&error.code==='GEMINI_KEY_SCOPE_TOO_BROAD');

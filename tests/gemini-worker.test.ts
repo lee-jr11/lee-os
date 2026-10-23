@@ -16,7 +16,7 @@ import {envelopeRequirements} from './helpers/envelope-contract';
 
 function remoteAdapter(){
  const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048}),credentials={apiKey:'gemini-test-secret',serviceAccountJson:JSON.stringify({type:'service_account',project_id:'leeos-test',client_email:'leeos-test@example.test',private_key:privateKey.export({type:'pkcs8',format:'pem'})})};
- let billingEnabled=false,generations=0,generationTransportFailures=0;const generationStatuses:number[]=[],prompts:string[]=[];
+ let billingEnabled=false,generations=0,generationTransportFailures=0,abortGenerationOnCall=false,generationStartedResolve!:()=>void;const generationStarted=new Promise<void>(resolve=>{generationStartedResolve=resolve;}),generationStatuses:number[]=[],prompts:string[]=[];
  const adapter=createGeminiAdapter({credentials:()=>credentials,transport:async(url,init)=>{
   if(url==='https://oauth2.googleapis.com/token')return Response.json({access_token:'gemini-test-access-token-long-enough',expires_in:3600});
   if(url.startsWith('https://apikeys.googleapis.com/v2/keys:lookupKey?'))return Response.json({parent:'projects/987654321/locations/global',name:'projects/987654321/locations/global/keys/test'});
@@ -24,10 +24,10 @@ function remoteAdapter(){
   if(url==='https://cloudbilling.googleapis.com/v1/projects/987654321/billingInfo')return Response.json({projectId:'leeos-test',billingEnabled,...(billingEnabled?{billingAccountName:'billingAccounts/987-654'}:{})});
   if(url===`https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId}`)return Response.json({name:`models/${geminiModelId}`,version:'test-pinned-model',inputTokenLimit:32768,outputTokenLimit:8192,supportedGenerationMethods:['generateContent']});
   if(url.endsWith(':countTokens')){const body=JSON.parse(String(init.body)) as {contents:{parts:{text:string}[]}[]};prompts.push(body.contents[0].parts[0].text);return Response.json({totalTokens:4});}
-  if(url.endsWith(':generateContent')){generations++;if(generationTransportFailures>0){generationTransportFailures--;throw Error('connection lost after dispatch');}const status=generationStatuses.shift();if(status)return new Response(null,{status});return Response.json({candidates:[{content:{parts:[{text:'Remote durable result'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:4,candidatesTokenCount:3,totalTokenCount:7}});}
+  if(url.endsWith(':generateContent')){generations++;if(abortGenerationOnCall){generationStartedResolve();const signal=init.signal;if(!signal)throw Error('Generation signal missing.');await new Promise<void>((_resolve,reject)=>{const aborted=()=>reject(Error('generation aborted'));if(signal.aborted)aborted();else signal.addEventListener('abort',aborted,{once:true});});}if(generationTransportFailures>0){generationTransportFailures--;throw Error('connection lost after dispatch');}const status=generationStatuses.shift();if(status)return new Response(null,{status});return Response.json({candidates:[{content:{parts:[{text:'Remote durable result'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:4,candidatesTokenCount:3,totalTokenCount:7}});}
   throw Error('Unexpected Gemini transport request.');
  }});
- return {adapter,setBillingEnabled:(v:boolean)=>{billingEnabled=v;},setGenerationStatuses:(...statuses:number[])=>generationStatuses.push(...statuses),setGenerationTransportFailures:(count:number)=>{generationTransportFailures=count;},get generations(){return generations;},prompts,credentials};
+ return {adapter,setBillingEnabled:(v:boolean)=>{billingEnabled=v;},setGenerationStatuses:(...statuses:number[])=>generationStatuses.push(...statuses),setGenerationTransportFailures:(count:number)=>{generationTransportFailures=count;},abortNextGeneration(){abortGenerationOnCall=true;},generationStarted,get generations(){return generations;},prompts,credentials};
 }
 
 async function fixture(testName:string,retryable503=false){
@@ -142,6 +142,21 @@ test('a lost generation response remains recovery-required and is never retried 
   assert.equal(call.status,'interrupted');assert.equal(call.error_code,'GEMINI_CONNECTION_FAILED');assert.equal(call.retryable,false);assert.equal(call.recovery_required,true);
   assert.equal((await f.db.query('SELECT id FROM model_usage WHERE run_id=$1',[f.base.run.id])).rows.length,0);
   assert.equal((await runEnvelopeWorkerOnce(f.db,{workerId:'worker_lost_response_second',enabled:()=>true,provider:f.provider,envelopeId:f.receipt.id,backoffMs:0})).status,'idle');
+  assert.equal((await createEnvelopeWorkerStore(f.db).get(f.receipt.id)).state,'recovery-required');assert.equal(f.remote.generations,1);
+ }finally{await f.cleanup();}
+});
+
+test('an aborted generation remains uncertain and is never retried automatically',{timeout:120000},async()=>{
+ const f=await fixture('aborted-generation'),controller=new AbortController();
+ try{
+  f.remote.abortNextGeneration();
+  const running=runEnvelopeWorkerOnce(f.db,{workerId:'worker_aborted_generation',enabled:()=>true,provider:f.provider,envelopeId:f.receipt.id,signal:controller.signal,backoffMs:0});
+  await f.remote.generationStarted;controller.abort();
+  const first=await running;assert.equal(first.status,'recovery-required');assert.equal(f.remote.generations,1);
+  const call=(await f.db.query('SELECT p.status,p.error_code,p.retryable,p.recovery_required FROM envelope_operation_attempts a JOIN provider_calls p ON p.id=a.call_id WHERE a.envelope_id=$1',[f.receipt.id])).rows[0];
+  assert.equal(call.status,'interrupted');assert.equal(call.error_code,'GEMINI_CONNECTION_FAILED');assert.equal(call.retryable,false);assert.equal(call.recovery_required,true);
+  assert.equal((await f.db.query('SELECT id FROM model_usage WHERE run_id=$1',[f.base.run.id])).rows.length,0);
+  assert.equal((await runEnvelopeWorkerOnce(f.db,{workerId:'worker_aborted_generation_second',enabled:()=>true,provider:f.provider,envelopeId:f.receipt.id,backoffMs:0})).status,'idle');
   assert.equal((await createEnvelopeWorkerStore(f.db).get(f.receipt.id)).state,'recovery-required');assert.equal(f.remote.generations,1);
  }finally{await f.cleanup();}
 });
